@@ -1,144 +1,292 @@
-# Made-up rooms and room sensors (the real data of the final tile comes in step 4).
+# Made-up rooms with data as the integration 0.2.0 gives it (the first example is the one the store picture shows).
+# Moments are epoch seconds (`*_time`: "{epoch+90m}" is 90 minutes from the run); -100 in `today_temp` is a band without
+# a temperature; today_mode is 0 off, 1 heat, 2 cool; a day is 0-1440 minutes of the wall clock.
+time_zone: Europe/Rome
 tiles:
 - tile: room
   name: Soggiorno
   entity: climate.soggiorno
   options: {room: sensor.soggiorno_programma}
-  sizes: [2x2, 3x2]
+  sizes: [2x2, 3x2, 4x4]
 - tile: room
   name: Camera
   entity: climate.camera
   options: {room: sensor.camera_programma}
-  sizes: [2x2]
+  sizes: [2x2, 3x2]
 - tile: room
   name: Fresco
   entity: climate.fresco
   options: {room: sensor.fresco_programma}
+  sizes: [2x2, 3x2]
+- tile: room
+  name: Studio
+  entity: climate.studio
+  options: {room: sensor.studio_programma}
+  sizes: [2x2]
+- tile: room
+  name: Mansarda
+  entity: climate.mansarda
+  options: {room: sensor.mansarda_programma}
   sizes: [2x2]
 - tile: room
   name: Lunga
   entity: climate.lunga
   options: {room: sensor.lunga_programma}
-  sizes: [2x2]
-- tile: room
-  name: Senza
-  entity: climate.senza
-  sizes: [2x2]
+  sizes: [2x2, 3x2]
 - tile: room
   name: Offline
   entity: climate.offline
-  options: {room: sensor.soggiorno_programma}
+  options: {room: sensor.offline_programma}
   sizes: [2x2]
 - tile: room
-  name: Enorme
-  entity: climate.enorme
-  options: {room: sensor.enorme_programma}
+  name: Senza stanza
+  entity: climate.senza
   sizes: [2x2]
+- tile: room
+  name: Bagno
+  entity: climate.bagno
+  options: {room: sensor.bagno_programma}
+  sizes: [2x2]
+- tile: room
+  name: Cucina
+  entity: climate.cucina
+  options: {room: sensor.cucina_programma}
+  sizes: [2x2]
+- tile: room
+  name: Garage
+  entity: climate.garage
+  options: {room: sensor.garage_programma}
+  sizes: [2x2]
+- tile: room
+  name: Taverna
+  entity: climate.taverna
+  options: {room: sensor.taverna_programma}
+  sizes: [2x2]
+- tile: room
+  name: Ripostiglio
+  entity: climate.ripostiglio
+  options: {room: sensor.ripostiglio_programma}
+  sizes: [2x2]
+- tile: room
+  name: Troppo grande
+  entity: climate.soggiorno
+  options: {room: sensor.soggiorno_programma}
+  sizes: [2x2]
+  data: {wait: too_large}
+- tile: room
+  name: Soggiorno grande
+  entity: climate.grande
+  options: {room: sensor.grande_programma}
+  sizes: [2x2, 4x4]
 states:
   climate.soggiorno:
     state: heat
-    attributes: {temperature: 21.5, current_temperature: 19.8, min_temp: 7, max_temp: 35, target_temp_step: 0.5, hvac_action: heating}
-  climate.camera:
-    state: heat
-    attributes: {temperature: 19, current_temperature: 18.2, min_temp: 7, max_temp: 35, target_temp_step: 0.5, hvac_action: idle}
-  climate.studio:
-    state: heat
-    attributes: {temperature: 20, current_temperature: 19, min_temp: 7, max_temp: 35, target_temp_step: 0.5}
-  climate.bagno:
-    state: heat
-    attributes: {temperature: 22, current_temperature: 21, min_temp: 7, max_temp: 35, target_temp_step: 0.5}
-  climate.cucina:
-    state: heat
-    attributes: {temperature: 20, current_temperature: 19, min_temp: 7, max_temp: 35, target_temp_step: 0.5}
-  climate.garage:
-    state: heat
-    attributes: {temperature: 20, current_temperature: 19, min_temp: 7, max_temp: 35, target_temp_step: 0.5}
-  climate.mansarda:
-    state: heat
-    attributes: {temperature: 20, current_temperature: 19, min_temp: 7, max_temp: 35, target_temp_step: 0.5}
-  climate.taverna:
-    state: heat
-    attributes: {temperature: 20, current_temperature: 19, min_temp: 7, max_temp: 35, target_temp_step: 0.5}
-  climate.ripostiglio:
-    state: heat
-    attributes: {temperature: 20, current_temperature: 19, min_temp: 7, max_temp: 35, target_temp_step: 0.5}
-  climate.fresco:
-    state: cool
-    attributes: {temperature: 24, current_temperature: 26.1, min_temp: 16, max_temp: 30, target_temp_step: 1, hvac_action: cooling}
-  climate.lunga:
-    state: heat
-    attributes: {temperature: 20.5, current_temperature: 19, min_temp: 7, max_temp: 35, target_temp_step: 0.5}
-  climate.senza:
-    state: 'off'
-    attributes: {current_temperature: 18.4, min_temp: 7, max_temp: 35}
-  climate.offline:
-    state: unavailable
-    attributes: {}
+    attributes: {min_temp: 7, max_temp: 35, target_temp_step: 0.5, temperature: 21.5, current_temperature: 19.8, hvac_action: heating}
   sensor.soggiorno_programma:
     state: Settimana
     attributes:
-      slot: {start: '06:30', end: '08:30', mode: heat, temp: 21}
-      next_slot: {start: '08:30', end: '17:00', mode: heat, temp: 18}
-      slot_end: '2026-11-02T18:00:00+01:00'
-      manual: true
-      override_until: '2026-11-02T18:00:00+01:00'
-      status: manual
-      today_start: [0, 390, 510, 1020, 1380]
-      today_end: [390, 510, 1020, 1380, 1440]
-      today_mode: [1, 1, 1, 1, 0]
-      today_temp: [17, 21, 18, 21.5, 0]
-      today_auto: [0, 0, 0, 0, 0]
+      today_start: [0, 360, 510, 1020, 1350]
+      today_end: [360, 510, 1020, 1350, 1440]
+      today_mode: [1, 1, 0, 1, 1]
+      today_temp: [17, 21, -100, 21.5, 17]
+      today_auto: [0, 0, 1, 0, 0]
+      slot_mode: 1
+      slot_temp: 21.5
+      slot_end_time: '{epoch+90m}'
+      next_mode: 1
+      next_temp: 18
+      next_start_time: '{epoch+90m}'
+      override_until_time: 0
+      status: ok
+      manual: false
+      holiday: false
+  climate.camera:
+    state: heat
+    attributes: {min_temp: 7, max_temp: 35, target_temp_step: 0.5, temperature: 22, current_temperature: 19.1, hvac_action: idle}
   sensor.camera_programma:
     state: Settimana
     attributes:
-      slot_end: '2026-11-02T22:00:00+01:00'
-      manual: false
-      today_start: [0, 360, 1320]
-      today_end: [360, 1320, 1440]
-      today_mode: [0, 1, 0]
-      today_temp: [0, 19, 0]
-      today_auto: [0, 0, 0]
+      today_start: [0, 390, 510, 1020, 1380]
+      today_end: [390, 510, 1020, 1380, 1440]
+      today_mode: [1, 1, 1, 1, 0]
+      today_temp: [17, 21, 18, 21.5, -100]
+      today_auto: [0, 0, 0, 0, 1]
+      slot_mode: 1
+      slot_temp: 18
+      slot_end_time: '{epoch+90m}'
+      next_mode: 0
+      next_temp: -100
+      next_start_time: '{epoch+90m}'
+      status: ok
+      manual: true
+      holiday: false
+      override_until_time: '{epoch+45m}'
+  climate.fresco:
+    state: cool
+    attributes: {min_temp: 16, max_temp: 30, target_temp_step: 1, temperature: 24, current_temperature: 26.1, hvac_action: cooling}
   sensor.fresco_programma:
     state: Estate
     attributes:
-      slot_end: '2026-11-02T20:00:00+01:00'
+      today_start: [0, 480, 780, 900, 1320]
+      today_end: [480, 780, 900, 1320, 1440]
+      today_mode: [0, 2, 0, 2, 0]
+      today_temp: [-100, 26, -100, 25, -100]
+      today_auto: [1, 0, 0, 0, 1]
+      slot_mode: 2
+      slot_temp: 25
+      slot_end_time: '{epoch+2h}'
+      next_mode: 0
+      next_temp: -100
+      next_start_time: '{epoch+2h}'
+      status: ok
       manual: false
-      today_start: [0, 600, 1200]
-      today_end: [600, 1200, 1440]
-      today_mode: [0, 2, 0]
-      today_temp: [0, 24, 0]
-      today_auto: [0, 0, 0]
-  sensor.lunga_programma:
-    state: Intensiva
-    attributes:
-      slot_end: '2026-11-02T13:30:00+01:00'
-      manual: false
-      today_start: [0, 90, 180, 270, 360, 450, 540, 630, 720, 810, 900, 990, 1080, 1170, 1260, 1350]
-      today_end: [90, 180, 270, 360, 450, 540, 630, 720, 810, 900, 990, 1080, 1170, 1260, 1350, 1440]
-      today_mode: [1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1]
-      today_temp: [17.5, 24, 0, 18.5, 25, 0, 19.5, 26, 0, 20.5, 27, 0, 21.5, 28, 0, 22.5]
-      today_auto: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-  climate.enorme:
+      holiday: false
+  climate.studio:
     state: heat
-    attributes: {temperature: 21, current_temperature: 20, min_temp: 7, max_temp: 35, target_temp_step: 0.5, hvac_action: heating}
-  sensor.enorme_programma:
-    state: Enorme
+    attributes: {min_temp: 7, max_temp: 35, target_temp_step: 0.5, temperature: 20.5, current_temperature: 20.1, hvac_action: idle}
+  sensor.studio_programma:
+    state: Weekend
     attributes:
-      slot_end: '2026-11-02T13:30:00+01:00'
+      today_start: [0, 540, 1380]
+      today_end: [540, 1380, 1440]
+      today_mode: [1, 1, 0]
+      today_temp: [17, 20.5, -100]
+      today_auto: [0, 0, 1]
+      slot_mode: 1
+      slot_temp: 20.5
+      slot_end_time: '{epoch+3h}'
+      next_mode: 0
+      next_temp: -100
+      next_start_time: '{epoch+3h}'
+      status: ok
       manual: false
-      today_start: [0, 12, 24, 36, 48, 60, 72, 84, 96, 108, 120, 132, 144, 156, 168, 180, 192, 204, 216, 228, 240, 252, 264, 276, 288, 300, 312, 324, 336, 348, 360, 372, 384, 396, 408, 420, 432, 444, 456,
-        468, 480, 492, 504, 516, 528, 540, 552, 564, 576, 588, 600, 612, 624, 636, 648, 660, 672, 684, 696, 708, 720, 732, 744, 756, 768, 780, 792, 804, 816, 828, 840, 852, 864, 876, 888, 900, 912, 924,
-        936, 948, 960, 972, 984, 996, 1008, 1020, 1032, 1044, 1056, 1068, 1080, 1092, 1104, 1116, 1128, 1140, 1152, 1164, 1176, 1188, 1200, 1212, 1224, 1236, 1248, 1260, 1272, 1284, 1296, 1308, 1320, 1332,
-        1344, 1356, 1368, 1380, 1392, 1404, 1416, 1428]
-      today_end: [12, 24, 36, 48, 60, 72, 84, 96, 108, 120, 132, 144, 156, 168, 180, 192, 204, 216, 228, 240, 252, 264, 276, 288, 300, 312, 324, 336, 348, 360, 372, 384, 396, 408, 420, 432, 444, 456, 468,
-        480, 492, 504, 516, 528, 540, 552, 564, 576, 588, 600, 612, 624, 636, 648, 660, 672, 684, 696, 708, 720, 732, 744, 756, 768, 780, 792, 804, 816, 828, 840, 852, 864, 876, 888, 900, 912, 924, 936,
-        948, 960, 972, 984, 996, 1008, 1020, 1032, 1044, 1056, 1068, 1080, 1092, 1104, 1116, 1128, 1140, 1152, 1164, 1176, 1188, 1200, 1212, 1224, 1236, 1248, 1260, 1272, 1284, 1296, 1308, 1320, 1332, 1344,
-        1356, 1368, 1380, 1392, 1404, 1416, 1428, 1440]
-      today_mode: [0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0,
-        1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2]
-      today_temp: [17.5, 18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0, 20.5,
-        21.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0,
-        17.5, 18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0, 17.5,
-        18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0]
-      today_auto: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+      holiday: true
+  climate.bagno:
+    state: heat
+    attributes: {min_temp: 7, max_temp: 35, target_temp_step: 0.5, temperature: 23, current_temperature: 22.4, hvac_action: heating}
+  sensor.bagno_programma:
+    state: Settimana
+    attributes:
+      today_start: [0, 390, 510, 1020, 1380]
+      today_end: [390, 510, 1020, 1380, 1440]
+      today_mode: [1, 1, 1, 1, 0]
+      today_temp: [17, 21, 18, 21.5, -100]
+      today_auto: [0, 0, 0, 0, 1]
+      slot_mode: 1
+      slot_temp: 23
+      slot_end_time: '{epoch+90m}'
+      status: ok
+      manual: true
+      holiday: false
+  climate.mansarda:
+    state: heat
+    attributes: {min_temp: 7, max_temp: 35, target_temp_step: 0.5, temperature: 19, current_temperature: 18.2, hvac_action: idle}
+  sensor.mansarda_programma:
+    state: Settimana
+    attributes:
+      today_start: [0, 390, 510, 1020, 1380]
+      today_end: [390, 510, 1020, 1380, 1440]
+      today_mode: [1, 1, 1, 1, 0]
+      today_temp: [17, 21, 18, 21.5, -100]
+      today_auto: [0, 0, 0, 0, 1]
+      status: paused
+      manual: false
+      holiday: false
+  climate.cucina:
+    state: heat
+    attributes: {min_temp: 7, max_temp: 35, target_temp_step: 0.5, temperature: 20, current_temperature: 19.5}
+  sensor.cucina_programma:
+    state: unknown
+    attributes: {status: unassigned, manual: false, holiday: false}
+  climate.garage:
+    state: heat
+    attributes: {min_temp: 7, max_temp: 35, target_temp_step: 0.5, temperature: 16, current_temperature: 14.8, hvac_action: idle}
+  sensor.garage_programma:
+    state: Settimana
+    attributes:
+      today_start: [0, 390, 510, 1020, 1380]
+      today_end: [390, 510, 1020, 1380, 1440]
+      today_mode: [1, 1, 1, 1, 0]
+      today_temp: [17, 21, 18, 21.5, -100]
+      today_auto: [0, 0, 0, 0, 1]
+      status: error
+      manual: false
+      holiday: false
+      slot_end_time: '{epoch+90m}'
+  climate.taverna:
+    state: heat
+    attributes: {min_temp: 7, max_temp: 35, target_temp_step: 0.5, temperature: 20, current_temperature: 19, hvac_action: idle}
+  sensor.taverna_programma:
+    state: unavailable
+    attributes: {}
+  climate.ripostiglio:
+    state: heat
+    attributes: {min_temp: 7, max_temp: 35, target_temp_step: 0.5, temperature: 18, current_temperature: 17.2, hvac_action: idle}
+  sensor.ripostiglio_programma:
+    state: Settimana
+    attributes:
+      today_start: []
+      today_end: []
+      today_mode: []
+      today_temp: []
+      today_auto: []
+      status: ok
+      manual: false
+      holiday: false
+  climate.lunga:
+    state: heat
+    attributes: {min_temp: 7, max_temp: 35, target_temp_step: 0.5, temperature: 20.5, current_temperature: 19, hvac_action: heating}
+  sensor.lunga_programma:
+    state: Settimana
+    attributes:
+      today_start: [0, 80, 160, 240, 320, 400, 480, 560, 640, 720, 800, 880, 960, 1040, 1120, 1200, 1280, 1360]
+      today_end: [80, 160, 240, 320, 400, 480, 560, 640, 720, 800, 880, 960, 1040, 1120, 1200, 1280, 1360, 1440]
+      today_mode: [1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0]
+      today_temp: [17.5, 18.0, -100, 19.0, 19.5, -100, 20.5, 21.0, -100, 18.0, 18.5, -100, 19.5, 20.0, -100, 21.0, 17.5, -100]
+      today_auto: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+      slot_mode: 1
+      slot_temp: 20.5
+      slot_end_time: '{epoch+40m}'
+      next_mode: 1
+      next_temp: 18
+      next_start_time: '{epoch+90m}'
+      status: ok
+      manual: false
+      holiday: false
+  climate.senza:
+    state: 'off'
+    attributes: {min_temp: 7, max_temp: 35, target_temp_step: 0.5, current_temperature: 18.4}
+  climate.offline:
+    state: unavailable
+    attributes: {}
+  sensor.offline_programma:
+    state: Settimana
+    attributes:
+      today_start: [0, 390, 510, 1020, 1380]
+      today_end: [390, 510, 1020, 1380, 1440]
+      today_mode: [1, 1, 1, 1, 0]
+      today_temp: [17, 21, 18, 21.5, -100]
+      today_auto: [0, 0, 0, 0, 1]
+      status: ok
+      manual: false
+      holiday: false
+  climate.grande:
+    state: heat
+    attributes: {min_temp: 7, max_temp: 35, target_temp_step: 0.5, temperature: 21, current_temperature: 20.2, hvac_action: heating}
+  sensor.grande_programma:
+    state: Programma invernale con nome lungo
+    attributes:
+      today_start: [0, 390, 510, 1020, 1380]
+      today_end: [390, 510, 1020, 1380, 1440]
+      today_mode: [1, 1, 1, 1, 0]
+      today_temp: [17, 21, 18, 21.5, -100]
+      today_auto: [0, 0, 0, 0, 1]
+      slot_mode: 1
+      slot_temp: 21
+      slot_end_time: '{epoch+90m}'
+      next_mode: 1
+      next_temp: 18
+      next_start_time: '{epoch+90m}'
+      status: ok
+      manual: false
+      holiday: false

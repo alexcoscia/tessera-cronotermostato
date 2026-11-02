@@ -5,7 +5,8 @@ keys, and a bar with today's bands of its weekly program. A tap on the bar opens
 
 > Needs the cronotermostato integration 0.2.0 or later in Home Assistant, and the Tessera app must allow the plugin's
 > Home Assistant actions (`cronotermostato.set_manual` and `cronotermostato.resume_auto`) for this display.
-> This is an early version: the drawing and the keys are still being built.
+> This is an early version: the tile only **shows** things for now. The **+** and **-** keys and the Auto / Manual
+> keys do not work yet (they come in the next version); a tap on the bar already opens the list of today's bands.
 
 ## Set up
 
@@ -15,6 +16,16 @@ keys, and a bar with today's bands of its weekly program. A tap on the bar opens
 4. Choose the room program sensor, `sensor.<room>_program` (in an Italian Home Assistant `sensor.<room>_programma`).
    The list shows every sensor: pick the one of the same room that ends in `_program`.
 5. Allow the actions `cronotermostato.set_manual` and `cronotermostato.resume_auto` for the display, if the app asks.
+
+## What the tile shows
+
+- The room's name (when the tile is tall enough), the target in large digits between the **+** key (left) and the
+  **-** key (right), and under it the temperature now, with a small amber dot while the thermostat heats and a blue one
+  while it cools.
+- Under the numbers, a line that says the state of the program: "Auto" and the program's name, "Manual until 18:00",
+  "Paused", "No program", "Problem" or "Unavailable". A line "Then Heating 21.5 at 17:00" shows when the tile has the room.
+- A bar with today's bands, from 00:00 to 24:00: amber for heating, blue for cooling, grey for off, and a dark tick for
+  now. A tap on the bar (not on the rest of the tile) opens the list of today's bands, the one of now marked.
 
 ## Good to know
 
