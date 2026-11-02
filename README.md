@@ -21,3 +21,16 @@ keys, and a bar with today's bands of its weekly program. A tap on the bar opens
 - Needs the cronotermostato integration 0.2.0 or later; older versions do not give the tile today's bands.
 - The tile does not fit a screen that has only one column in its layout (a vertical CYD or the Waveshare 4.3-inch).
 - It lives beside Home Assistant's own schedules: it only commands the rooms you give a program in the integration.
+
+## Development
+
+The logic that needs no screen (bands to pixels, texts, the + and - timing, what the pill says) is in
+`components/cronotermostato/cronotermostato_logic.h`, plain C++17. Its tests build and run on a computer, with the
+address and undefined-behaviour sanitizers:
+
+```sh
+tests/run.sh
+```
+
+`tests/parity.inc` holds bar positions computed by the editor's own `stripSegments` (integration repository,
+`tests/frontend/cases.json`); the bar must match them within a pixel.
