@@ -1,4 +1,4 @@
-# SPIKE data: the provisional tile with made-up rooms and a made-up room sensor.
+# Made-up rooms and room sensors (the real data of the final tile comes in step 4).
 tiles:
 - tile: room
   name: Soggiorno
@@ -8,7 +8,7 @@ tiles:
 - tile: room
   name: Camera
   entity: climate.camera
-  options: {room: sensor.camera_programma, probe: card}
+  options: {room: sensor.camera_programma}
   sizes: [2x2]
 - tile: room
   name: Fresco

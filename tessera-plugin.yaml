@@ -1,5 +1,5 @@
-# Cronotermostato: a room tile for the cronotermostato Home Assistant integration (weekly programs for climate entities).
-# THIS IS THE SPIKE VERSION (Passo 0 of the plan): a provisional tile to try the API, not the final tile. See SPIKE.md.
+# Cronotermostato: a room tile for the cronotermostato Home Assistant integration (weekly programs for climate
+# entities): the target temperature with plus and minus keys, and a bar with today's bands of the room's program.
 # Every field is explained in docs/MANIFEST.md of tessera-plugins.
 id: cronotermostato
 version: 0.1.0
@@ -12,32 +12,38 @@ topics: [home]
 requires:
   esphome: 2026.6.2
 boards: any
-flash_kb: 6
+flash_kb: 8
 
 permissions:
-  # The integration's two services (another integration's, not climate.*), and climate.set_temperature as the fallback.
-  home_assistant_actions: [cronotermostato.set_manual, cronotermostato.resume_auto, climate.set_temperature]
+  # The keys call the integration's two services; they are not climate.* actions. The screen only sends them.
+  home_assistant_actions: [cronotermostato.set_manual, cronotermostato.resume_auto]
 
 cards:
+  # The list of today's bands, opened by a tap on the bar.
   - { id: day, name: card_name }
 
 tiles:
   - id: room
     name: tile_name
     icon: thermometer
+    # 2x2 is the least that holds the keys, the temperatures and the bar. Not larger than 4x4: past that the
+    # room's bar and keys only grow, with nothing more to show.
     sizes: { min: 2x2, max: 4x4 }
+    # About 20 blocks (16 bands, the track, the "now" tick, 2 keys) and 6 labels, plus the bands the tile keeps.
     memory: 3000
     domains: [climate]
+    # What the tile reads of the climate: the target and the temperature now, the keys' limits and step, the action.
     attributes: [temperature, current_temperature, min_temp, max_temp, target_temp_step, hvac_action]
     example: tile_example
     preview: { title: "{name}", value: "{temperature}" }
     options:
-      # The room's schedule sensor of the integration: today's bands travel as parallel lists of numbers.
+      # The room's program sensor of the integration (sensor.<room>_programma). An option cannot filter with
+      # has_attributes (only a tile's own entity can), so the inspector offers every sensor: the hint says which.
+      # 15 attributes (the most is 16): today's bands as parallel lists of numbers, the band now
+      # and the next (mode 0 off / 1 heat / 2 cool), and the state of the override. Moments come as epoch seconds.
       - id: room
         kind: entity
         domains: [sensor]
-        attributes: [today_start, today_end, today_mode, today_temp, today_auto, slot, next_slot, slot_end, manual, override_until, status]
+        attributes: [today_start, today_end, today_mode, today_temp, today_auto, slot_mode, slot_temp, slot_end_time, next_mode, next_temp, next_start_time, manual, override_until_time, status, holiday]
         label: room
         hint: room_hint
-      # Spike only: which probe a tap on the tile runs (see SPIKE.md).
-      - { id: probe, kind: text, label: probe, hint: probe_hint }

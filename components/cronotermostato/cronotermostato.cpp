@@ -1,4 +1,5 @@
-// SPIKE (Passo 0): a provisional 2x2 room tile to try the API. Not the final tile: see SPIKE.md.
+// Cronotermostato: the room tile and the card with today's bands. This is the skeleton (plan 3, step 2): the real
+// drawing and the keys come in steps 4 and 5. What was tried before is in docs/SPIKE.md.
 #include "cronotermostato.h"
 #include "esphome/core/log.h"
 #include <algorithm>
@@ -22,20 +23,12 @@ struct Band {
   float temp = 0;
 };
 
-// Four-digit minute count -> "HH:MM" is done by the caller; this reads the "HH:MM" of an ISO text ("2026-11-02T18:00:00+01:00").
-static std::string clock_of_iso(const char *iso) {
-  if (!iso || std::strlen(iso) < 16) return "";
-  return std::string(iso + 11, 5);
-}
-
 class RoomTile : public tessera::Tile {
  public:
   explicit RoomTile(const tessera::Plugin *plugin) : plugin_(plugin) {}
 
   void create(const tessera::TileContext &c) override {
     std::snprintf(entity_, sizeof entity_, "%s", c.entity);
-    const char *probe = c.options["probe"] | "";
-    std::snprintf(probe_, sizeof probe_, "%s", probe);
     tile_ = c.tile;
     w_ = c.width;
     h_ = c.height;
@@ -99,10 +92,6 @@ class RoomTile : public tessera::Tile {
   }
 
   void on_state(JsonObjectConst data) override {
-    // SPIKE: the raw message, to see how lists arrive and how big it is.
-    std::string raw;
-    serializeJson(data, raw);
-    ESP_LOGI(TAG, "on_state %u bytes: %s", (unsigned) raw.size(), raw.c_str());
     state_ = data["state"] | "";
     JsonObjectConst a = data["attributes"];
     target_ = a["temperature"] | -1000.0f;
@@ -111,14 +100,6 @@ class RoomTile : public tessera::Tile {
     have_room_ = !room.isNull();
     JsonObjectConst r = room["attributes"];
     JsonArrayConst s = r["today_start"], e = r["today_end"], m = r["today_mode"], t = r["today_temp"];
-    {
-      std::string keys;
-      for (JsonPairConst kv : r) { keys += kv.key().c_str(); keys += ","; }
-      ESP_LOGI(TAG, "room attribute keys: %s (slot_end is<const char*>=%d)", keys.c_str(), (int) r["slot_end"].is<const char *>());
-      ESP_LOGI(TAG, "tail: %s", raw.size() > 120 ? raw.c_str() + raw.size() - 120 : raw.c_str());
-    }
-    ESP_LOGI(TAG, "lists: start is<array>=%d size=%u first is<int>=%d is<float>=%d", (int) s.isNull() ? 0 : 1,
-             (unsigned) s.size(), (int) s[0].is<int>(), (int) s[0].is<float>());
     n_ = 0;
     for (size_t i = 0; i < s.size() && i < (size_t) MAX_SEGMENTS; ++i) {
       band_[n_].start = s[i] | 0;
@@ -127,9 +108,10 @@ class RoomTile : public tessera::Tile {
       band_[n_].temp = t[i] | 0.0f;
       ++n_;
     }
-    std::snprintf(slot_end_, sizeof slot_end_, "%s", clock_of_iso(r["slot_end"] | "").c_str());
     manual_ = r["manual"] | false;
-    ESP_LOGI(TAG, "bands=%d slot_end=%s manual=%d", n_, slot_end_, (int) manual_);
+    paused_ = std::string(r["status"] | "") == "paused";
+    // Moments come as seconds since 1970 (the attribute names end in _time).
+    until_ = manual_ ? (uint32_t) (r["override_until_time"] | 0) : (uint32_t) (r["slot_end_time"] | 0);
   }
 
   void on_tick(uint32_t epoch) override {
@@ -146,8 +128,12 @@ class RoomTile : public tessera::Tile {
     ui::set_tone(set_, mood_tone(), theme::INK);
     ui::set_color(name_, theme::MUTED);
     ui::set_color(now_, theme::MUTED);
-    std::string pill = probe_result_;
-    if (pill.empty()) pill = !have_room_ ? plugin_->text("no_room") : (slot_end_[0] ? tessera::fill(plugin_->text("until"), "t", slot_end_) : std::string());
+    std::string pill;
+    if (offline) pill = plugin_->text("unavailable");
+    else if (!have_room_) pill = plugin_->text("no_room");
+    else if (paused_) pill = plugin_->text("paused");
+    else if (until_) pill = tessera::fill(plugin_->text("until"), "time", tessera::clock_text(until_));
+    else pill = plugin_->text(manual_ ? "manual" : "auto");
     ui::set_text(pill_, pill);
     ui::set_tone(pill_, manual_ ? Tone::BUSY : Tone::NORMAL, theme::MUTED);
     for (int i = 0; i < 2; ++i) ui::set_color(key_label_[i], offline ? theme::MUTED : theme::INK);
@@ -177,41 +163,8 @@ class RoomTile : public tessera::Tile {
 
   void on_theme() override { on_tick(tessera::epoch()); }
 
-  // SPIKE: the probes of Passo 0 (c) and (d). The bench taps the middle of the tile once per example.
-  void on_tap() override {
-    JsonDocument f;
-    bool ok = false;
-    const std::string p = probe_;
-    if (p == "card") {
-      tessera::open_card(plugin_->plugin_id(), "day", entity_, tile_);
-      ok = true;
-    } else if (p == "set_manual") {            // the planned form: no entity, the climate in the fields
-      f["climate_entity_id"] = entity_;
-      f["mode"] = "heat";
-      f["temperature"] = 21.5;
-      ok = tessera::action("cronotermostato.set_manual", "", f);
-    } else if (p == "set_manual_entity") {     // the entity as the target: arrives as entity_id
-      f["mode"] = "heat";
-      f["temperature"] = 21.5;
-      ok = tessera::action("cronotermostato.set_manual", entity_, f);
-    } else if (p == "dup") {                   // entity_id in the fields next to an entity: refused
-      f["entity_id"] = entity_;
-      f["mode"] = "heat";
-      ok = tessera::action("cronotermostato.set_manual", entity_, f);
-    } else if (p == "entity_id_field") {       // entity_id in the fields with no entity: allowed?
-      f["entity_id"] = entity_;
-      f["mode"] = "heat";
-      ok = tessera::action("cronotermostato.set_manual", "", f);
-    } else if (p == "resume") {
-      f["climate_entity_id"] = entity_;
-      ok = tessera::action("cronotermostato.resume_auto", "", f);
-    } else if (p == "fallback") {
-      f["temperature"] = 21.5;
-      ok = tessera::action("climate.set_temperature", entity_, f);
-    }
-    ESP_LOGI(TAG, "probe %s -> %d (entity %s)", p.c_str(), (int) ok, entity_);
-    probe_result_ = p + (ok ? " sent" : " NOT sent");
-  }
+  // A tap opens the list of today's bands (the final tile limits this to the bar, step 5).
+  void on_tap() override { tessera::open_card(plugin_->plugin_id(), "day", entity_, tile_); }
 
  private:
   Tone mood_tone() const {
@@ -221,10 +174,11 @@ class RoomTile : public tessera::Tile {
   }
 
   const tessera::Plugin *plugin_;
-  char entity_[96]{}, probe_[24]{}, slot_end_[8]{};
-  std::string state_, probe_result_;
+  char entity_[96]{};
+  std::string state_;
+  uint32_t until_ = 0;
   int w_ = 0, h_ = 0, tile_ = -1, bar_y_ = 0, bar_h_ = 0, tick_h_ = 0, pill_y_ = 0, keys_y_ = 0, keys_h_ = 0, key_w_ = 0;
-  bool show_name_ = false, have_room_ = false, manual_ = false;
+  bool show_name_ = false, have_room_ = false, manual_ = false, paused_ = false;
   float target_ = -1000, current_ = -1000;
   Band band_[MAX_SEGMENTS];
   int n_ = 0;
@@ -232,7 +186,7 @@ class RoomTile : public tessera::Tile {
   lv_obj_t *key_[2]{}, *key_label_[2]{}, *seg_[MAX_SEGMENTS]{};
 };
 
-// SPIKE: a card with one row per band, to see how many rows fit and what the card is given.
+// The card: one row per band of today, "08:00-12:00  Heat  21.5".
 class DayCard : public tessera::Card {
  public:
   explicit DayCard(const tessera::Plugin *plugin) : plugin_(plugin) {}
@@ -244,23 +198,24 @@ class DayCard : public tessera::Card {
       lv_obj_set_width(row_[i], c.width);
       lv_obj_set_pos(row_[i], 0, i * line);
     }
-    ESP_LOGI(TAG, "card %d x %d, line %d, rows %d, entity %s tile %d", c.width, c.height, line, rows_, c.entity, c.tile);
   }
   void on_state(JsonObjectConst data) override {
-    std::string raw;
-    serializeJson(data, raw);
-    ESP_LOGI(TAG, "card on_state %u bytes: %s", (unsigned) raw.size(), raw.c_str());
     JsonObjectConst r = data["entities"]["room"]["attributes"];
     JsonArrayConst s = r["today_start"], e = r["today_end"], m = r["today_mode"], t = r["today_temp"];
     for (int i = 0; i < rows_; ++i) {
       if (i >= (int) s.size()) {
-        ui::set_text(row_[i], "");
+        ui::set_text(row_[i], i == 0 ? plugin_->text("no_bands") : "");
         continue;
       }
       char buf[64];
       const int a = s[i] | 0, b = e[i] | 0, mode = m[i] | 0;
-      std::snprintf(buf, sizeof buf, "%02d:%02d-%02d:%02d  %s  %.1f", a / 60, a % 60, b / 60 % 24, b % 60,
-                    mode == 1 ? "heat" : mode == 2 ? "cool" : "off", (double) (t[i] | 0.0f));
+      const float temp = t[i] | 0.0f;
+      const char *mode_key = mode == 1 ? "heat" : mode == 2 ? "cool" : "off";
+      if (temp > -99.0f)
+        std::snprintf(buf, sizeof buf, "%02d:%02d-%02d:%02d  %s  %.1f", a / 60, a % 60, b / 60 % 24, b % 60,
+                      plugin_->text(mode_key), (double) temp);
+      else
+        std::snprintf(buf, sizeof buf, "%02d:%02d-%02d:%02d  %s", a / 60, a % 60, b / 60 % 24, b % 60, plugin_->text(mode_key));
       ui::set_text(row_[i], buf);
     }
   }

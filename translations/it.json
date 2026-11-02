@@ -1,20 +1,29 @@
 {
-  "_meta": { "name": "Italiano" },
+  "_meta": {
+    "name": "Italiano"
+  },
   "screen": {
     "now": "Ora {n}",
-    "until": "fino alle {t}",
-    "no_room": "Scegli il sensore",
-    "unavailable": "Non disponibile"
+    "auto": "Auto",
+    "manual": "Manuale",
+    "until": "Fino alle {time}",
+    "then": "Poi {value}",
+    "paused": "In pausa",
+    "unavailable": "Non disponibile",
+    "holiday": "Festivo",
+    "no_room": "Scegli una stanza",
+    "heat": "Caldo",
+    "cool": "Freddo",
+    "off": "Spento",
+    "no_bands": "Nessuna fascia oggi"
   },
   "app": {
     "name": "Cronotermostato",
-    "summary": "Programmi settimanali di riscaldamento dell'integrazione cronotermostato, con le fasce di oggi su una barra.",
+    "summary": "Programmi settimanali di riscaldamento dell'integrazione cronotermostato: imposta la stanza e vedi le fasce di oggi su una barra.",
     "tile_name": "Programma stanza",
     "tile_example": "21,5, fino alle 18:00",
     "card_name": "Fasce di oggi",
-    "room": "Sensore della stanza",
-    "room_hint": "Il sensore programma della stanza, per esempio sensor.soggiorno_programma.",
-    "probe": "Prova (spike)",
-    "probe_hint": "Solo per lo spike: cosa fa un tocco."
+    "room": "Sensore programma della stanza",
+    "room_hint": "Il sensore programma della stanza dell'integrazione cronotermostato, per esempio sensor.soggiorno_programma. L'elenco mostra tutti i sensori: scegli quello che finisce per _programma."
   }
 }
