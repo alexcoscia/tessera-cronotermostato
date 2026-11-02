@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace esphome::cronotermostato {
@@ -68,12 +69,19 @@ inline bool clean_minutes(double v, int &out) {
 }
 }  // namespace detail
 
+// The bands of a day ready to draw. `truncated_before` / `truncated_after`: the day has more bands than MAX_BANDS and the
+// ones before / after the window were left out, so the bar has an unexplained empty part on that side (the tile may mark it).
+struct Day {
+  std::vector<Band> bands;
+  bool truncated_before = false, truncated_after = false;
+};
+
 // Lists -> clean bands. Lists of different lengths: the shortest wins. A band with a value that is not a finite number
 // for its start or end is dropped; minutes outside 0-1440 are clamped; a band with start >= end (after clamping) is
-// dropped; bands are sorted by start (stable) and a band that overlaps an earlier one starts where that one ends.
-// At most MAX_BANDS are returned: when there are more, the window that holds the band of `focus_minute` (or the next
+// dropped; bands are sorted by start (stable) and a band that overlaps an earlier one starts where that one ends;
+// adjacent bands with the same mode, temperature and auto flag become one. At most MAX_BANDS are returned: when there are more, the window that holds the band of `focus_minute` (or the next
 // one, or the last) is kept; without a focus (< 0) the first ones.
-inline std::vector<Band> normalize_bands(const DayLists &l, int focus_minute = -1) {
+inline Day normalize_day(const DayLists &l, int focus_minute = -1) {
   size_t n = std::min({l.start.size(), l.end.size(), l.mode.size(), l.temp.size(), l.autom.size(), MAX_LIST_ITEMS});
   std::vector<Band> all;
   all.reserve(n);
@@ -95,8 +103,14 @@ inline std::vector<Band> normalize_bands(const DayLists &l, int focus_minute = -
     b.start = std::max(b.start, covered);
     if (b.start >= b.end) continue;
     covered = b.end;
+    if (!out.empty() && out.back().end == b.start && out.back().mode == b.mode && out.back().has_temp == b.has_temp &&
+        out.back().temp == b.temp && out.back().autom == b.autom) {
+      out.back().end = b.end;
+      continue;
+    }
     out.push_back(b);
   }
+  Day day;
   if (out.size() > MAX_BANDS) {
     size_t cur = 0;
     if (focus_minute >= 0) {
@@ -109,10 +123,15 @@ inline std::vector<Band> normalize_bands(const DayLists &l, int focus_minute = -
         }
     }
     const size_t first = cur > 7 ? std::min(cur - 7, out.size() - MAX_BANDS) : 0;
+    day.truncated_before = first > 0;
+    day.truncated_after = first + MAX_BANDS < out.size();
     out = std::vector<Band>(out.begin() + first, out.begin() + first + MAX_BANDS);
   }
-  return out;
+  day.bands = std::move(out);
+  return day;
 }
+
+inline std::vector<Band> normalize_bands(const DayLists &l, int focus_minute = -1) { return normalize_day(l, focus_minute).bands; }
 
 // A band on the bar, in pixels: [x0, x1).
 struct Segment {
@@ -165,6 +184,16 @@ inline int now_x(int minute, int width) {
   return std::min((int) ((int64_t) m * width / MINUTES_PER_DAY), width - 1);
 }
 
+// The pixel for the "now" marker when the bar is drawn: like now_x, but moved inside the drawn band of that minute
+// (the floor of the minute can lie one pixel left of the rounded start of its band).
+inline int now_marker(const std::vector<Segment> &segments, int minute, int width) {
+  int x = now_x(minute, width);
+  const int m = std::min(std::max(minute, 0), MINUTES_PER_DAY - 1);
+  for (const Segment &s : segments)
+    if (s.start <= m && m < s.end) return std::min(std::max(x, s.x0), s.x1 - 1);
+  return x;
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // Text
 
@@ -207,6 +236,7 @@ inline std::string format_temp(double value, double step, char separator = '.', 
   for (int i = 0; i < d; ++i) scale *= 10;
   const int64_t n = std::llround(value * (double) scale + (value < 0 ? -1e-9 : 1e-9));   // half away from zero
   const int64_t a = n < 0 ? -n : n;
+  if (a >= 1000 * scale) return "-";   // rounding can reach 1000
   char buf[32];
   if (d == 0) {
     std::snprintf(buf, sizeof buf, "%s%lld", n < 0 ? "-" : "", (long long) a);
@@ -279,7 +309,12 @@ class Setpoint {
   // The target Home Assistant reports (NaN: none).
   void on_state(double reported_degrees, uint32_t /*now*/) {
     reported_ = to_centi(reported_degrees);
-    if (pending_ && reported_ == pending_value_) settle();   // HA brought the value we chose
+    if (in_flight_ && reported_ == sent_value_) {   // HA brought what we sent
+      in_flight_ = false;
+      confirm_on_ = false;
+    }
+    // HA brought the value we chose. While a different value is on its way, a report equal to the pending one is stale.
+    if (pending_ && reported_ == pending_value_ && (!in_flight_ || sent_value_ == pending_value_)) settle();
     if (!pending_) shown_ = reported_;
   }
 
@@ -295,7 +330,7 @@ class Setpoint {
     pending_value_ = target;
     debounce_on_ = true;
     debounce_since_ = now;
-    confirm_on_ = false;
+    confirm_on_ = false;   // the wait restarts with the next send; in_flight_ and sent_value_ stay
     return true;
   }
 
@@ -306,12 +341,19 @@ class Setpoint {
   bool take(uint32_t now, int &value) {
     if (!due(now)) return false;
     debounce_on_ = false;
-    if (pending_value_ == reported_) {
+    if (in_flight_ && pending_value_ == sent_value_) {   // already on its way: only wait again
+      confirm_on_ = true;
+      confirm_since_ = now;
+      return false;
+    }
+    if (!in_flight_ && pending_value_ == reported_) {
       settle();
       shown_ = reported_;
       return false;
     }
     value = pending_value_;
+    sent_value_ = value;
+    in_flight_ = true;
     confirm_on_ = true;
     confirm_since_ = now;
     return true;
@@ -343,12 +385,13 @@ class Setpoint {
     pending_ = false;
     debounce_on_ = false;
     confirm_on_ = false;
-    pending_value_ = NO_VALUE;
+    in_flight_ = false;
+    pending_value_ = sent_value_ = NO_VALUE;
   }
 
   SetpointRange range_;
-  int reported_ = NO_VALUE, shown_ = NO_VALUE, pending_value_ = NO_VALUE;
-  bool pending_ = false, debounce_on_ = false, confirm_on_ = false;
+  int reported_ = NO_VALUE, shown_ = NO_VALUE, pending_value_ = NO_VALUE, sent_value_ = NO_VALUE;
+  bool pending_ = false, debounce_on_ = false, confirm_on_ = false, in_flight_ = false;   // in_flight_: sent, not confirmed
   uint32_t debounce_since_ = 0, confirm_since_ = 0;
 };
 
@@ -385,7 +428,8 @@ struct TileView {
   Pill pill = Pill::UNAVAILABLE;
   std::string program;         // name of the program (AUTO, MANUAL, PROBLEM; empty otherwise)
   bool show_until = false;     // "until HH:MM": `until` is valid
-  int64_t until = 0;           // MANUAL: the override's end; AUTO/PROBLEM: the slot's end
+  int64_t until = 0;           // epoch s. Show it as "until" only when pill == MANUAL (the override's end); in AUTO and
+                               // PROBLEM it is the end of the slot (the tile may ignore it)
   bool has_next = false;       // "then ...": next_* are valid
   Mode next_mode = Mode::OFF;
   bool next_has_temp = false;
@@ -406,7 +450,8 @@ inline std::string cut_name(const std::string &s) {
 inline bool is_down(const std::string &s) { return s.empty() || s == "unavailable" || s == "unknown"; }
 }  // namespace detail
 
-// Order: climate down, no room chosen, room down, paused, problem, manual, no program, auto.
+// Order: climate down, no room chosen, room down (unavailable, missing), paused, no program (unassigned, not_running),
+// problem (unsupported_*, out_of_range, error, unknown status), manual, no program (empty state), auto.
 inline TileView tile_view(const TileInput &in) {
   TileView v;
   if (detail::is_down(in.climate_state)) return v;   // UNAVAILABLE
@@ -421,6 +466,10 @@ inline TileView tile_view(const TileInput &in) {
   }
   const bool ok = in.status.empty() || in.status == "ok";
   const bool no_program = in.room_state.empty() || in.room_state == "unknown";
+  if (in.status == "unassigned" || in.status == "not_running") {   // nothing to show, nothing to command
+    v.pill = Pill::NO_PROGRAM;
+    return v;
+  }
   if (!ok) v.pill = Pill::PROBLEM;
   else if (in.manual) v.pill = Pill::MANUAL;
   else if (no_program) v.pill = Pill::NO_PROGRAM;
@@ -429,7 +478,7 @@ inline TileView tile_view(const TileInput &in) {
   if (!no_program) v.program = detail::cut_name(in.room_state);
   v.controls = true;
   v.bar_visible = true;
-  v.can_resume = v.pill == Pill::MANUAL;
+  v.can_resume = in.manual;   // also in PROBLEM: an override can be dropped whatever the status
   v.until = v.pill == Pill::MANUAL ? in.override_until : in.slot_end;
   v.show_until = v.until > 0;
   if (!v.show_until) v.until = 0;

@@ -33,4 +33,6 @@ tests/run.sh
 ```
 
 `tests/parity.inc` holds bar positions computed by the editor's own `stripSegments` (integration repository,
-`tests/frontend/cases.json`); the bar must match them within a pixel.
+`tests/frontend/cases.json`); the bar must match them within a pixel. `tests/overlap.inc` holds a day with overlapping
+bands: the editor draws them over each other, the tile trims the later one (a deliberate difference). Regenerate both with
+`node tools/gen_parity.mjs [path of the integration repository]` (default `../cronotermostato`).

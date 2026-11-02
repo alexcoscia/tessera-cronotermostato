@@ -81,7 +81,7 @@ TEST(bands_empty_and_mismatched_lengths) {
 }
 
 TEST(bands_temp_sentinel) {
-  auto b = bands_of({0, 100, 200, 300}, {100, 200, 300, 400}, {1, 1, 1, 1}, {-100, -100.5, -99.9, NaN}, {0, 0, 0, 0});
+  auto b = bands_of({0, 200, 400, 600}, {100, 300, 500, 700}, {1, 1, 1, 1}, {-100, -100.5, -99.9, NaN}, {0, 0, 0, 0});   // gaps: not merged
   CHECK(b.size() == 4);
   CHECK(!b[0].has_temp);          // exactly -100: absent
   CHECK(!b[1].has_temp);          // below: absent
@@ -135,7 +135,7 @@ TEST(bands_max_16_window) {
     s.push_back(i * 30);
     e.push_back(i * 30 + 30);
     m.push_back(1);
-    t.push_back(20);
+    t.push_back(20 + (i % 2));
     a.push_back(0);
   }
   auto first = bands_of(s, e, m, t, a);
@@ -257,18 +257,26 @@ static const std::vector<JsCase> &js_cases() {
   return c;
 }
 
+static const std::vector<JsCase> &overlap_cases() {
+  static const std::vector<JsCase> c = {
+#include "overlap.inc"
+  };
+  return c;
+}
+
 TEST(bar_parity_with_editor_strip_segments) {
   CHECK(js_cases().size() >= 10);
-  for (int width : {1440, 2880, 1000, 302, 480}) {
+  for (int width : {1440, 2880, 1000, 302, 480, 3, 7}) {
     for (auto &c : js_cases()) {
       V s, e, m, t, a;
       for (auto &g : c.segs) {
         s.push_back(g.start);
         e.push_back(g.end);
         m.push_back(1);
-        t.push_back(20);
+        t.push_back(20 + (int) t.size());
         a.push_back(0);
       }
+      if ((size_t) width < c.segs.size()) continue;
       auto segs = bar_segments(bands_of(s, e, m, t, a), width);
       CHECK(segs.size() == c.segs.size());
       if (segs.size() != c.segs.size()) continue;
@@ -319,6 +327,177 @@ TEST(now_marker) {
   CHECK(x >= s[1].x0 && x < s[1].x1);
   const int y = now_x(719, 300);
   CHECK(y >= s[0].x0 && y < s[0].x1);
+}
+
+static DayLists distinct_day(int n, int minutes_each, bool reversed = false) {
+  DayLists l;
+  for (int k = 0; k < n; ++k) {
+    const int i = reversed ? n - 1 - k : k;
+    l.start.push_back(i * minutes_each);
+    l.end.push_back(i * minutes_each + minutes_each);
+    l.mode.push_back(1);
+    l.temp.push_back(20 + (i % 2));
+    l.autom.push_back(0);
+  }
+  return l;
+}
+
+TEST(bands_adjacent_equal_are_merged) {
+  auto b = bands_of({0, 100, 200, 300, 400, 500}, {100, 200, 300, 400, 500, 600}, {1, 1, 1, 1, 2, 0}, {20, 20, 21, 21, 21, -100}, {0, 0, 0, 0, 0, 0});
+  CHECK(b.size() == 4);
+  CHECK(b[0].start == 0 && b[0].end == 200);      // heat 20 + heat 20
+  CHECK(b[1].start == 200 && b[1].end == 400);    // heat 21 + heat 21
+  CHECK(b[2].start == 400 && b[2].mode == Mode::COOL);   // other mode: not merged
+  CHECK(b[3].mode == Mode::OFF);
+  // not merged: a gap, another temperature, another auto flag, temperature present vs absent
+  CHECK(bands_of({0, 150}, {100, 200}, {1, 1}, {20, 20}, {0, 0}).size() == 2);
+  CHECK(bands_of({0, 100}, {100, 200}, {1, 1}, {20, 20.5}, {0, 0}).size() == 2);
+  CHECK(bands_of({0, 100}, {100, 200}, {0, 0}, {-100, -100}, {0, 1}).size() == 2);
+  CHECK(bands_of({0, 100}, {100, 200}, {0, 0}, {-100, -100}, {1, 1}).size() == 1);
+  CHECK(bands_of({0, 100}, {100, 200}, {1, 1}, {-100, 20}, {0, 0}).size() == 2);
+  // bands made adjacent by trimming an overlap are merged too
+  CHECK(bands_of({0, 50}, {100, 200}, {1, 1}, {20, 20}, {0, 0}).size() == 1);
+}
+
+TEST(bands_merge_frees_the_limit) {
+  DayLists l;
+  for (int i = 0; i < 40; ++i) {
+    l.start.push_back(i * 30);
+    l.end.push_back(i * 30 + 30);
+    l.mode.push_back(1);
+    l.temp.push_back(20);
+    l.autom.push_back(0);
+  }
+  Day d = normalize_day(l, 600);
+  CHECK(d.bands.size() == 1 && d.bands[0].start == 0 && d.bands[0].end == 1200);
+  CHECK(!d.truncated_before && !d.truncated_after);
+  // 20 raw bands that merge to 10
+  DayLists m;
+  for (int i = 0; i < 20; ++i) {
+    m.start.push_back(i * 60);
+    m.end.push_back(i * 60 + 60);
+    m.mode.push_back(1);
+    m.temp.push_back(20 + ((i / 2) % 2));
+    m.autom.push_back(0);
+  }
+  Day e = normalize_day(m, 0);
+  CHECK(e.bands.size() == 10 && !e.truncated_before && !e.truncated_after);
+}
+
+TEST(day_window_offset_and_truncation_flags) {
+  const DayLists l = distinct_day(40, 30);
+  // focus in band 25 (minutes 750-779): the window starts 7 bands before it
+  Day d = normalize_day(l, 755);
+  CHECK(d.bands.size() == 16);
+  CHECK(d.bands[0].start == 18 * 30 && d.bands[15].end == 34 * 30);
+  CHECK(d.truncated_before && d.truncated_after);
+  // the very first bands: window at 0, only the end is cut
+  d = normalize_day(l, 3 * 30 + 1);
+  CHECK(d.bands[0].start == 0 && !d.truncated_before && d.truncated_after);
+  d = normalize_day(l, 7 * 30);        // band 7: still window 0
+  CHECK(d.bands[0].start == 0);
+  d = normalize_day(l, 8 * 30);        // band 8: window starts at band 1
+  CHECK(d.bands[0].start == 30 && d.truncated_before);
+  // the last bands: window ends at the last band, only the start is cut
+  d = normalize_day(l, 1190);
+  CHECK(d.bands[0].start == 24 * 30 && d.bands.back().end == 1200 && d.truncated_before && !d.truncated_after);
+  // end == focus: that band is over, the next one is the current one
+  d = normalize_day(l, 26 * 30);       // end of band 25 = start of band 26
+  CHECK(d.bands[0].start == 19 * 30);
+  d = normalize_day(l, 26 * 30 - 1);   // last minute of band 25
+  CHECK(d.bands[0].start == 18 * 30);
+  // no focus: the first 16
+  d = normalize_day(l, -1);
+  CHECK(d.bands[0].start == 0 && !d.truncated_before && d.truncated_after);
+  // a day with 16 bands or fewer is never truncated
+  d = normalize_day(distinct_day(16, 60), 500);
+  CHECK(d.bands.size() == 16 && !d.truncated_before && !d.truncated_after);
+  d = normalize_day(distinct_day(17, 60), 100);
+  CHECK(d.bands.size() == 16 && !d.truncated_before && d.truncated_after);
+  CHECK(normalize_day(DayLists{}, 5).bands.empty());
+}
+
+TEST(day_window_with_input_in_reverse_order) {
+  Day a = normalize_day(distinct_day(40, 30, false), 755);
+  Day b = normalize_day(distinct_day(40, 30, true), 755);
+  CHECK(a.bands.size() == b.bands.size() && b.bands.size() == 16);
+  for (size_t i = 0; i < a.bands.size(); ++i) CHECK(a.bands[i].start == b.bands[i].start && a.bands[i].end == b.bands[i].end);
+  // equal starts among many bands: the first given keeps its minutes, the second is trimmed (stable order)
+  DayLists l = distinct_day(20, 60);
+  l.start.push_back(0);
+  l.end.push_back(500);
+  l.mode.push_back(2);
+  l.temp.push_back(25);
+  l.autom.push_back(0);
+  Day c = normalize_day(l, 0);
+  CHECK(c.bands[0].start == 0 && c.bands[0].end == 60 && c.bands[0].mode == Mode::HEAT);
+  CHECK(c.bands[1].start == 60);
+}
+
+TEST(now_marker_is_always_on_a_drawn_band) {
+  const DayLists l = distinct_day(40, 30);
+  for (int width : {1, 2, 17, 100, 288, 302, 1024}) {
+    for (int minute = 0; minute < 1200; ++minute) {
+      Day d = normalize_day(l, minute);
+      auto segs = bar_segments(d.bands, width);
+      const int x = now_marker(segs, minute, width);
+      bool on = false;
+      for (auto &g : segs)
+        if (g.start <= minute && minute < g.end) on = x >= g.x0 && x < g.x1;
+      bool drawn = false;
+      for (auto &g : segs) drawn = drawn || (g.start <= minute && minute < g.end);
+      if (!drawn) continue;                 // narrower than the number of bands: that band is not drawn
+      if (!on) std::printf("w %d minute %d x %d\n", width, minute, x);
+      CHECK(on);
+    }
+  }
+  // outside any band the marker is where now_x puts it
+  auto segs = bar_segments(normalize_bands(l, 5000), 100);
+  CHECK(now_marker(segs, 1439, 100) == now_x(1439, 100));
+  CHECK(now_marker({}, 700, 100) == now_x(700, 100));
+  CHECK(now_marker(segs, 5000, 100) == now_x(5000, 100));
+}
+
+TEST(now_x_may_fall_one_pixel_left_of_a_band_without_now_marker) {
+  // why now_marker exists: floor(minute) can lie left of round(start)
+  auto b = bands_of({0, 400}, {400, 1440}, {1, 2}, {20, 25}, {0, 0});
+  auto s = bar_segments(b, 100);
+  CHECK(s[1].x0 == 28);                        // 27.78 rounds up
+  CHECK(now_x(400, 100) == 27);                // floor: one pixel off
+  CHECK(now_marker(s, 400, 100) == 28);
+}
+
+TEST(bar_overlap_differs_from_the_editor_on_purpose) {
+  // the editor draws overlapping bands over each other; the tile trims the later one so that nothing overlaps
+  CHECK(!overlap_cases().empty());
+  for (auto &c : overlap_cases()) {
+    V s, e, m, t, a;
+    for (auto &g : c.segs) {
+      s.push_back(g.start);
+      e.push_back(g.end);
+      m.push_back(1);
+      t.push_back(20 + (int) t.size());
+      a.push_back(0);
+    }
+    auto segs = bar_segments(bands_of(s, e, m, t, a), 1440);
+    CHECK(segs.size() == c.segs.size());
+    int prev = 0;
+    for (auto &x : segs) {
+      CHECK(x.x0 >= prev);
+      prev = x.x1;
+    }
+    // the first band is drawn as in the editor; the overlapping part of the second is cut
+    CHECK(segs[0].x0 == c.segs[0].start && segs[0].x1 == c.segs[0].end);
+    CHECK(segs[1].x0 == c.segs[0].end && segs[1].x1 == c.segs[1].end);
+    CHECK(segs[1].x0 > c.segs[1].start);
+  }
+}
+
+TEST(bar_half_pixel_boundaries_round_up) {
+  // 720 minutes on a 3 px bar is 1.5 px: the shared boundary goes to 2, for both neighbours
+  auto b = bands_of({0, 720}, {720, 1440}, {1, 2}, {20, 25}, {0, 0});
+  auto s = bar_segments(b, 3);
+  CHECK(s.size() == 2 && s[0].x1 == 2 && s[1].x0 == 2 && s[1].x1 == 3);
 }
 
 // ---------------------------------------------------------------- 2. tones
@@ -399,6 +578,11 @@ TEST(format_temperature) {
   CHECK_STR(format_temp(-1e300, 0.5), "-");
   CHECK_STR(format_temp(1000, 0.5), "-");
   CHECK_STR(format_temp(NaN, 0.5, '.', true), "-");
+  CHECK_STR(format_temp(999.96, 0.1), "-");       // rounds to 1000.0: out of the format
+  CHECK_STR(format_temp(-999.96, 0.1), "-");
+  CHECK_STR(format_temp(999.4, 1), "999");
+  CHECK_STR(format_temp(999.5, 1), "-");
+  CHECK_STR(format_temp(999.94, 0.1), "999.9");
 }
 
 TEST(format_temperature_only_font_digits_chars) {
@@ -632,6 +816,82 @@ TEST(setpoint_new_tap_cancels_the_old_confirmation_wait) {
   CHECK(sp.shown() == 2100);
 }
 
+TEST(setpoint_back_to_reported_value_while_a_send_is_in_flight_is_sent) {
+  Setpoint sp = make_sp();
+  sp.on_state(21.0, 0);
+  sp.on_tap(+1, 1000);
+  int v = 0;
+  CHECK(sp.take(1600, v) && v == 2150);     // sent 21.5, HA has not reported it yet
+  sp.on_tap(-1, 1700);                      // back to 21.0, which is still what HA says
+  CHECK(sp.shown() == 2100);
+  CHECK(!sp.tick(1700 + 5000));             // not reverting while the user is mid-way
+  CHECK(sp.take(2300, v) && v == 2100);     // 21.0 equals the reported value but 21.5 is on its way: send it
+  sp.on_state(21.5, 2400);                  // late report of the first send
+  CHECK(sp.pending() && sp.shown() == 2100);
+  CHECK(!sp.tick(2300 + 4999));
+  sp.on_state(21.0, 2500);                  // HA now at 21.0
+  CHECK(!sp.pending() && sp.shown() == 2100);
+}
+
+TEST(setpoint_intermediate_report_does_not_lose_the_value) {
+  Setpoint sp = make_sp();
+  sp.on_state(21.0, 0);
+  sp.on_tap(+1, 1000);
+  int v = 0;
+  CHECK(sp.take(1600, v) && v == 2150);
+  sp.on_tap(-1, 1700);                      // pending 21.0, not sent yet
+  sp.on_state(21.5, 1800);                  // HA confirms the first send before our second goes out
+  CHECK(sp.pending() && sp.shown() == 2100);
+  CHECK(sp.take(2300, v) && v == 2100);     // 21.0 differs from 21.5: sent
+  sp.on_state(21.0, 2400);
+  CHECK(!sp.pending());
+}
+
+TEST(setpoint_stale_report_equal_to_pending_does_not_cancel_it) {
+  Setpoint sp = make_sp();
+  sp.on_state(21.0, 0);
+  sp.on_tap(+1, 1000);
+  int v = 0;
+  CHECK(sp.take(1600, v));                  // 21.5 in flight
+  sp.on_tap(-1, 1700);                      // pending 21.0
+  sp.on_state(21.0, 1800);                  // a stale report of the old value: must not settle
+  CHECK(sp.pending());
+  CHECK(sp.take(2300, v) && v == 2100);
+}
+
+TEST(setpoint_after_confirmation_nothing_is_in_flight) {
+  Setpoint sp = make_sp();
+  sp.on_state(21.0, 0);
+  sp.on_tap(+1, 1000);
+  int v = 0;
+  CHECK(sp.take(1600, v));
+  sp.on_tap(+1, 1650);                      // a newer value is pending when the confirmation comes
+  sp.on_state(21.5, 1700);                  // confirmed: nothing in flight any more
+  CHECK(sp.pending() && sp.shown() == 2200);
+  sp.on_tap(-1, 2100);                      // back to what HA has
+  CHECK(!sp.take(2700, v));
+  CHECK(!sp.pending() && sp.shown() == 2150);   // settled at once, no wait for a timeout
+}
+
+TEST(setpoint_same_value_as_in_flight_is_not_sent_twice_but_rearms_the_wait) {
+  Setpoint sp = make_sp();
+  sp.on_state(21.0, 0);
+  sp.on_tap(+1, 1000);
+  int v = 0;
+  CHECK(sp.take(1600, v) && v == 2150);
+  sp.on_tap(+1, 1700);
+  sp.on_tap(-1, 1800);                      // 21.5 again
+  CHECK(!sp.take(2400, v));                 // already on its way
+  CHECK(sp.pending());
+  CHECK(!sp.tick(2400 + 4999));
+  CHECK(sp.tick(2400 + 5000));              // still no answer: back to the real value
+  CHECK(sp.shown() == 2100 && !sp.pending());
+  // and now a plain "back to reported" is skipped again
+  sp.on_tap(+1, 9000);
+  sp.on_tap(-1, 9100);
+  CHECK(!sp.take(9700, v) && !sp.pending());
+}
+
 TEST(setpoint_range_change_clamps_the_value_to_send) {
   Setpoint sp = make_sp();
   sp.on_state(30.0, 0);
@@ -798,6 +1058,51 @@ TEST(pill_problem_statuses) {
   CHECK(tile_view(in).pill == Pill::AUTO);
 }
 
+struct StatusRow {
+  const char *status;
+  bool manual;
+  Pill pill;
+  bool controls;       // also bar_visible
+  bool can_resume;
+};
+
+TEST(pill_every_status_of_the_integration) {
+  const StatusRow rows[] = {
+      {"ok", false, Pill::AUTO, true, false},
+      {"ok", true, Pill::MANUAL, true, true},
+      {"paused", false, Pill::PAUSED, false, false},
+      {"paused", true, Pill::PAUSED, false, false},
+      {"unassigned", false, Pill::NO_PROGRAM, false, false},
+      {"unassigned", true, Pill::NO_PROGRAM, false, false},
+      {"not_running", false, Pill::NO_PROGRAM, false, false},
+      {"not_running", true, Pill::NO_PROGRAM, false, false},
+      {"unavailable", false, Pill::UNAVAILABLE, false, false},
+      {"unavailable", true, Pill::UNAVAILABLE, false, false},
+      {"missing", false, Pill::UNAVAILABLE, false, false},
+      {"missing", true, Pill::UNAVAILABLE, false, false},
+      {"unsupported_mode", false, Pill::PROBLEM, true, false},
+      {"unsupported_mode", true, Pill::PROBLEM, true, true},
+      {"unsupported_preset", false, Pill::PROBLEM, true, false},
+      {"unsupported_preset", true, Pill::PROBLEM, true, true},
+      {"out_of_range", false, Pill::PROBLEM, true, false},
+      {"out_of_range", true, Pill::PROBLEM, true, true},
+      {"error", false, Pill::PROBLEM, true, false},
+      {"error", true, Pill::PROBLEM, true, true},
+  };
+  for (const auto &r : rows) {
+    TileInput in = base_input();
+    in.status = r.status;
+    in.manual = r.manual;
+    TileView v = tile_view(in);
+    if (v.pill != r.pill) std::printf("status %s manual %d\n", r.status, (int) r.manual);
+    CHECK(v.pill == r.pill);
+    CHECK(v.controls == r.controls);
+    CHECK(v.bar_visible == r.controls);
+    CHECK(v.can_resume == r.can_resume);
+    if (r.pill == Pill::NO_PROGRAM) CHECK(v.program.empty() && !v.show_until && !v.has_next);
+  }
+}
+
 TEST(pill_program_name_is_cut_to_a_safe_length) {
   TileInput in = base_input();
   in.room_state = std::string(5000, 'x');
@@ -860,7 +1165,7 @@ TEST(card_rows_max_16_keeps_current_in_view) {
     l.start.push_back(i * 30);
     l.end.push_back(i * 30 + 30);
     l.mode.push_back(1);
-    l.temp.push_back(20);
+    l.temp.push_back(20 + (i % 2));
     l.autom.push_back(0);
   }
   for (int now : {0, 100, 600, 1000, 1199, 1300}) {
