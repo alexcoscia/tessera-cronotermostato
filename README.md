@@ -1,30 +1,40 @@
 # Cronotermostato
 
-A room tile for the cronotermostato integration of Home Assistant: the target temperature of a room with plus and minus
-keys, and a bar with today's bands of its weekly program. A tap on the bar opens the list of today's bands.
+A room tile for the cronotermostato integration of Home Assistant. It shows the room's target temperature with **+** and
+**-** keys, the program that rules the room, and a bar with today's bands (heating, cooling, off). A tap on the bar opens
+the list of today's bands.
 
-> Needs the cronotermostato integration 0.2.0 or later in Home Assistant, and the Tessera app must allow the plugin's
-> Home Assistant actions (`cronotermostato.set_manual` and `cronotermostato.resume_auto`) for this display.
-> The keys and the pill send those two actions to Home Assistant. They are checked on the plugin bench (the action and its
-> fields are right, and nothing leaves before 600 ms), **not yet on a real screen nor against a real thermostat**: try
-> them on a spare room first.
+> **Not tried on a real screen yet.** Everything here was checked on the plugin bench only (the pictures, the touch zones,
+> and the commands the keys would send). Try it on a spare room first. See "What is not tried yet" below.
+
+## Needs
+
+- The **cronotermostato integration 0.2.0 or later** in Home Assistant. Older versions do not give the tile today's bands.
+- A `climate` entity for the room, and the room's program sensor from the integration, `sensor.<room>_program` (in an
+  Italian Home Assistant `sensor.<room>_programma`).
+- The screen must be allowed to call two Home Assistant actions: `cronotermostato.set_manual` and
+  `cronotermostato.resume_auto`. The keys and the pill send them.
+- A screen with two or more columns in its layout (see "Limits").
 
 ## Set up
 
-1. In the Tessera app, open Plugins and enable **Cronotermostato** for the screen. The screen builds once.
-2. In Layout, place the **Room program** tile on a page. It needs at least 2 columns by 2 rows, and is not offered larger than 3 columns by 2 rows.
-3. In the inspector, choose the room's climate entity (for example `climate.living_room`).
-4. Choose the room program sensor, `sensor.<room>_program` (in an Italian Home Assistant `sensor.<room>_programma`).
-   The list shows every sensor: pick the one of the same room that ends in `_program`.
-5. Allow the actions `cronotermostato.set_manual` and `cronotermostato.resume_auto` for the display, if the app asks.
+1. In the Tessera app, open **Plugins** and enable **Cronotermostato** for the screen. The screen builds once.
+2. Open the screen's **Layout** and place the **Room program** tile on a page. It needs at least 2 columns by 2 rows and
+   is not offered larger than 3 columns by 2 rows.
+3. In the tile's inspector, choose the room's **climate entity** (for example `climate.living_room`).
+4. Choose the **room program sensor**. The list shows every sensor: pick the one of the same room that ends in
+   `_program` (`_programma` in Italian).
+5. Allow the actions `cronotermostato.set_manual` and `cronotermostato.resume_auto` for this display, if the app asks.
+   Without that permission the keys do nothing.
+6. Make sure the integration in Home Assistant is version 0.2.0 or later, and that the room has a program assigned.
 
 ## What the tile shows
 
 - The room's name (when the tile is tall enough), the target in large digits between the **+** key (left) and the
   **-** key (right), and under it the temperature now, with a small amber dot while the thermostat heats and a blue one
   while it cools.
-- Under the numbers, a line that says the state of the program: "Auto" and the program's name, "Manual until 18:00 x",
-  "Paused", "No program", "Problem" or "Unavailable". A line "Then Heating 21.5 at 17:00" shows when the tile has the room.
+- A line that says the state of the program: "Auto" and the program's name, "Manual until 18:00 x", "Paused",
+  "No program", "Problem" or "Unavailable". A line "Then Heating 21.5 at 17:00" shows when there is room for it.
 - A bar with today's bands, from 00:00 to 24:00: amber for heating, blue for cooling, grey for off, and a dark tick for
   now.
 
@@ -34,34 +44,42 @@ keys, and a bar with today's bands of its weekly program. A tap on the bar opens
 |---|---|
 | **+** (left) or **-** (right) | The target moves one step (the thermostat's own step and limits) and shows at once. 600 ms after the last tap one command goes out, `cronotermostato.set_manual` with the new temperature: the room is forced **until the end of the current band**, then the program takes over again. If Home Assistant does not report the new target within 5 seconds, the tile shows the real one again. |
 | The pill, while it says **Manual ... x** | Back to the program: one command, `cronotermostato.resume_auto`. The pill is drawn as a key (a chip behind it) only then. |
-| The bar (and the strip just over it) | Opens the list of today's bands, the one of now marked. |
+| The bar, and the strip just over it | Opens the list of today's bands, the one of now marked. |
 | Anywhere else | Nothing. |
 
-- There is no separate "Manual" key: pressing **+** or **-** already forces the room, and the pill then says "Manual".
-- **+** and **-** act only while the thermostat is in `heat` or `cool`, and they send that same mode with `set_manual`
-  (the service requires one). They never switch a room on and never change its mode. In any other state (off, auto,
-  heat_cool, dry, fan_only, unavailable) the keys are dimmed and do nothing.
+## Limits
+
+- **+** and **-** work only while the thermostat is in `heat` or `cool`, and they send that same mode with `set_manual`.
+  They never switch a room on and never change its mode. In any other state (off, auto, heat_cool, dry, fan_only,
+  unavailable) the keys are dimmed and do nothing.
 - The keys are also dimmed and do nothing when the room has no program assigned, is paused, is unavailable, or the tile
-  has no usable climate entity (an id too long for the tile counts as none).
-- The pill is a key for any manual override, also while it says "Problem x". Only the chip and a small margin around it
-  react, not the whole row; while the command is on its way its text is dimmed.
-- In automatic the bar zone also covers the line "Auto · Program" (up to 7 mm over the bar), so a tap there opens the list
-  of bands.
-- The zones never overlap. The keys' zones are at least 11 mm wide; the bar zone runs the full width of the tile. On a
-  small tile (the 2.8-inch CYD) the pill zone is less than the 7 mm of a comfortable key (about 4.4 mm); on the larger
-  screens it is 7 mm.
-- A screen that cannot say where the finger touched (`tap_point()` gives -1,-1) does nothing on a tap. Where the zones
-  fall on a real finger is to be tried on a real screen.
+  has no usable climate entity.
+- There is no separate "Manual" key: pressing **+** or **-** already forces the room, and the pill then says "Manual".
+- The tile is offered from 2x2 up to 3x2 only.
+- It does not fit a screen that has only one column in its layout (a vertical CYD or the Waveshare 4.3-inch).
+- The times in the list of bands are always 24-hour ("17:00"), also on a screen set to AM/PM. The pill and the "then"
+  line follow the screen's own clock format.
+- With more bands than the list has rows, its last row says how many are left out ("+3 more"), and the rows shown are
+  the ones around now.
+- On a small tile (the 2.8-inch CYD) the pill's touch zone is about 4.4 mm high, less than the 7 mm of a comfortable key;
+  on the larger screens it is 7 mm. The keys' zones are at least 11 mm wide.
+- A screen that cannot say where the finger touched does nothing on a tap.
 
 ## Good to know
 
-- The times in the list of bands are always 24-hour ("17:00"), also on a screen set to AM/PM; the pill and the "then" line
-  follow the screen's own clock format. A known limit.
-- With more bands than the list has rows, its last row says how many are left out ("+3 more"), and the rows shown are the ones around now.
+- It lives beside Home Assistant's other schedules (the Scheduler, for example). It only commands the rooms you give a
+  program to in the integration.
+- A manual change lasts until the end of the current band. To keep a room at a temperature for longer, change the
+  program in the integration.
 
-- Needs the cronotermostato integration 0.2.0 or later; older versions do not give the tile today's bands.
-- The tile does not fit a screen that has only one column in its layout (a vertical CYD or the Waveshare 4.3-inch).
-- It lives beside Home Assistant's own schedules: it only commands the rooms you give a program in the integration.
+## What is not tried yet
+
+- **A real screen.** The tile was drawn and its touch zones were checked on the plugin bench on several screens, light and
+  dark. It was not built for and run on a real display, so how the zones fall under a real finger, the colours in the
+  room's light and the speed of the screen are unknown.
+- **A real Home Assistant.** The keys and the pill send the two actions with the right fields (checked on the bench), but
+  they were not yet sent to a real Home Assistant, nor to a real thermostat. The tap on the bar and the list of bands
+  (the card) were drawn on the bench but not tried by hand on a screen.
 
 ## Development
 
@@ -77,3 +95,6 @@ tests/run.sh
 `tests/frontend/cases.json`); the bar must match them within a pixel. `tests/overlap.inc` holds a day with overlapping
 bands: the editor draws them over each other, the tile trims the later one (a deliberate difference). Regenerate both with
 `node tools/gen_parity.mjs [path of the integration repository]` (default `../cronotermostato`).
+
+The notes of the first spike on the plugin API are in `docs/SPIKE.md` (history). The checklist for trying the plugin on a
+real screen is in `docs/PROVA_SU_SCHERMO.md` (Italian).
