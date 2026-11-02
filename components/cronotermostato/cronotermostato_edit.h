@@ -686,6 +686,15 @@ class EditSession {
     return true;
   }
 
+  // After a refused, unsent or unanswered save the copy goes back to `in` (what Home Assistant has now), but only when the
+  // person has no way to save it again: the list view has no Save key, so a failed Delete would otherwise show a band as
+  // gone that Home Assistant still has. The state (ERROR / TIMEOUT) stays for the status line. True when the copy changed.
+  bool discard_unsaved(const EditInput &in) {
+    if (!opened_ || (state_ != SaveState::ERROR && state_ != SaveState::TIMEOUT) || !model_.dirty()) return false;
+    model_.load(in);
+    return true;
+  }
+
   // From the tile's tick: 5 s after the send without an answer. True when the state changed (repaint).
   bool tick(uint32_t now) {
     if (!opened_ || state_ != SaveState::SAVING || !expired(now, sent_at_, SAVE_TIMEOUT_MS)) return false;

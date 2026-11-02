@@ -1690,6 +1690,27 @@ TEST(sent_is_normalized_and_the_merged_arrival_is_saved) {
   }
 }
 
+TEST(discard_unsaved_after_a_failed_delete) {
+  const EditInput ha = input({U(60, 120, 1, 20), U(180, 240, 1, 21)});
+  for (int how = 0; how < 3; ++how) {   // 0 refused by HA, 1 not sent, 2 timeout
+    EditSession s = open_session({U(60, 120, 1, 20), U(180, 240, 1, 21)});
+    s.model().select(0);
+    CHECK(s.model().remove().changed);
+    s.model().deselect();
+    CHECK(s.press_save(0).send);
+    CHECK(!s.discard_unsaved(ha));   // under way: nothing is dropped
+    if (how == 0) s.on_state(input({U(60, 120, 1, 20), U(180, 240, 1, 21)}, "mon;3;r1;day_locked"), 1);
+    if (how == 1) CHECK(s.send_failed());
+    if (how == 2) CHECK(s.tick(5000));
+    CHECK(s.model().size() == 1);
+    CHECK(s.discard_unsaved(ha));
+    CHECK(s.model().size() == 2);
+    CHECK(!s.model().dirty());
+    CHECK(!s.discard_unsaved(ha));
+    CHECK(s.state() != SaveState::IDLE);
+  }
+}
+
 TEST(reload_unfreezes_the_model) {
   EditSession s = open_session({U(60, 120, 1, 20)});
   s.model().select(0);

@@ -783,6 +783,7 @@ class DayCard : public tessera::Card {
       } else {
         session_.model().set_range(range_);
         react(session_.on_state(last_, millis()));
+        settle_list();
       }
     }
     paint();
@@ -794,7 +795,10 @@ class DayCard : public tessera::Card {
     const uint32_t now = millis();
     bool redo = false;
     if (session_.opened()) {
-      if (session_.tick(now)) redo = true;
+      if (session_.tick(now)) {
+        settle_list();
+        redo = true;
+      }
       if (transient_.any() && expired(now, transient_at_, MESSAGE_MS)) {
         transient_ = TextKeys();
         redo = true;
@@ -1030,6 +1034,11 @@ class DayCard : public tessera::Card {
     view_ = EView::LIST;
     paint();
   }
+  // The list has no Save key: a copy left changed by a Delete that failed (refused, not sent, no answer) goes back to what
+  // Home Assistant has, so the list never shows a band as gone that is still there.
+  void settle_list() {
+    if (view_ == EView::LIST) session_.discard_unsaved(last_);
+  }
   void say(Msg m) {
     transient_ = msg_text(m);
     transient_at_ = millis();
@@ -1072,6 +1081,10 @@ class DayCard : public tessera::Card {
   }
   void send_request(const SaveRequest &rq) {
     if (!rq.send) return;
+    if (!entity_[0]) {   // no room id (too long to keep): nothing is sent with an empty climate_entity_id
+      session_.send_failed();
+      return;
+    }
     JsonDocument fields;
     fields["climate_entity_id"] = entity_;
     fields["day_kind"] = rq.day_kind;
@@ -1097,6 +1110,7 @@ class DayCard : public tessera::Card {
     }
     m.deselect();
     view_ = EView::LIST;
+    settle_list();   // a Delete that was not even sent leaves nothing to save
   }
 
   // --- painting ------------------------------------------------------------------------------------------------
