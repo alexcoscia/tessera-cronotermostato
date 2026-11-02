@@ -15,8 +15,9 @@ boards: any
 flash_kb: 8
 
 permissions:
-  # The keys call the integration's two services; they are not climate.* actions. The screen only sends them.
-  home_assistant_actions: [cronotermostato.set_manual, cronotermostato.resume_auto]
+  # The keys call the integration's services; they are not climate.* actions. The screen only sends them.
+  # set_day writes the bands of today from the display (plan 4).
+  home_assistant_actions: [cronotermostato.set_manual, cronotermostato.resume_auto, cronotermostato.set_day]
 
 cards:
   # The list of today's bands, opened by a tap on the bar.
@@ -42,11 +43,13 @@ tiles:
     options:
       # The room's program sensor of the integration (sensor.<room>_programma). An option cannot filter with
       # has_attributes (only a tile's own entity can), so the inspector offers every sensor: the hint says which.
-      # 15 attributes (the most is 16): today's bands as parallel lists of numbers, the band now
-      # and the next (mode 0 off / 1 heat / 2 cool), and the state of the override. Moments come as epoch seconds.
+      # 16 attributes (the most): today's bands as parallel lists (today_flags: bit 1 automatic band, bit 2 locked band;
+      # today_preset: texts), the end of the band now and the next (mode 0 off / 1 heat / 2 cool), the state of the override,
+      # and what editing needs: edit_info = "<today_kind>;<program_rooms>;<program_revision>;<last_error>", edit_seq (count of
+      # refused set_day) and edit_n (entries of the lists, to notice lists the core cut). Moments come as epoch seconds.
       - id: room
         kind: entity
         domains: [sensor]
-        attributes: [today_start, today_end, today_mode, today_temp, today_auto, slot_mode, slot_temp, slot_end_time, next_mode, next_temp, next_start_time, manual, override_until_time, status, holiday]
+        attributes: [today_start, today_end, today_mode, today_temp, today_flags, today_preset, slot_end_time, next_mode, next_temp, next_start_time, manual, override_until_time, status, edit_info, edit_seq, edit_n]
         label: room
         hint: room_hint

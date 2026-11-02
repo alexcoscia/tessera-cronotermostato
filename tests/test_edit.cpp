@@ -70,11 +70,11 @@ static EditInput input(const std::vector<S> &v, const char *info = "mon;3;r1;", 
     in.lists.end.push_back(x.e);
     in.lists.mode.push_back(x.mode);
     in.lists.temp.push_back(x.temp);
-    in.lists.autom.push_back(x.autom ? 1 : 0);
+    in.flags.push_back((x.autom ? 1 : 0) | (x.locked != 0 ? 2 : 0));
     in.preset.push_back(x.preset);
-    in.locked.push_back(x.locked);
   }
   in.info = parse_edit_info(info);
+  in.info.n = (int) v.size();
   in.program_name = name;
   return in;
 }
@@ -168,7 +168,10 @@ TEST(edit_info_hostile) {
   CHECK(!parse_edit_info("").valid);
   CHECK(!parse_edit_info(";;;").valid);               // empty kind, rooms, revision
   CHECK(!parse_edit_info("mon;3;r1").valid);          // missing the error field
-  CHECK_STR(parse_edit_info("mon;3;r1").kind, "mon"); // what is there is still read
+  CHECK(parse_edit_info("mon;3;r1").kind.empty());    // a text that is not whole gives no kind, rooms, revision
+  CHECK(parse_edit_info("mon;3;r1").rooms == -1 && parse_edit_info("mon;3;r1").revision.empty());
+  CHECK(parse_edit_info("mon;x;r1;").kind.empty() && parse_edit_info("mon;x;r1;").revision.empty());
+  CHECK_STR(parse_edit_info("mon;3;;conflict").error, "conflict");   // the error code is still readable
   CHECK(!parse_edit_info("mon;3").valid);
   CHECK(!parse_edit_info("mon").valid);
   CHECK(!parse_edit_info("mon;3;r1;;").valid);        // too many ";"
@@ -256,7 +259,7 @@ TEST(load_damaged_inputs) {
   }
   {  // locked list missing
     EditInput in = input({U(0, 60, 1, 20)});
-    in.locked.clear();
+    in.flags.clear();
     EditModel m;
     m.load(in);
     CHECK(m.damaged());
@@ -308,10 +311,10 @@ TEST(load_damaged_inputs) {
       in.lists.end.push_back(0);
       in.lists.mode.push_back(0);
       in.lists.temp.push_back(0);
-      in.lists.autom.push_back(1);
+      in.flags.push_back(1);
       in.preset.push_back("");
-      in.locked.push_back(0);
     }
+    in.info.n = 300;
     EditModel m;
     m.load(in);
     CHECK(m.damaged());
@@ -321,13 +324,24 @@ TEST(load_damaged_inputs) {
 
 TEST(load_automatic_flag_hostile) {
   EditInput in = input({U(0, 60, 1, 20), U(60, 120, 1, 21)});
-  in.lists.autom[1] = NaN;   // not a number: a user band
+  in.flags[1] = NaN;   // not a number: nothing is known of the band (it stays a row) and the day is damaged
   EditModel m;
   m.load(in);
-  CHECK(m.size() == 2);
-  in.lists.autom[1] = 2;     // any non-zero: automatic
+  CHECK(m.size() == 2 && m.damaged());
+  in.flags[1] = 1;     // bit 1: automatic
   m.load(in);
-  CHECK(m.size() == 1);
+  CHECK(m.size() == 1 && !m.damaged());
+  in.flags[1] = 3;     // automatic and locked: still a gap
+  m.load(in);
+  CHECK(m.size() == 1 && !m.has_locked());
+  in.flags[1] = 2;     // bit 2: locked
+  m.load(in);
+  CHECK(m.size() == 2 && m.band(1)->locked && !m.damaged());
+  for (double bad : {-1.0, 256.0, 0.5, 1e30, INF}) {
+    in.flags[1] = bad;
+    m.load(in);
+    CHECK(m.damaged());
+  }
 }
 
 // ------------------------------------------------------------------------------------------------ pages and selection
@@ -857,10 +871,11 @@ TEST(round_trip_real_days) {
       in.lists.end.push_back(b.end);
       in.lists.mode.push_back((int) b.mode);
       in.lists.temp.push_back(b.has_temp ? b.centi / 100.0 : -100);
-      in.lists.autom.push_back(0);
+      in.flags.push_back(0);
       in.preset.push_back(b.preset);
-      in.locked.push_back(0);
     }
+    in.info = parse_edit_info("mon;3;r1;");
+    in.info.n = (int) back.size();
     again.load(in);
     CHECK(!again.damaged());
     CHECK(same_bands(again.bands(), m.bands()));
@@ -1106,16 +1121,17 @@ TEST(save_blocked_when_not_opened) {
   s.acknowledge();
 }
 
-TEST(save_without_revision_leaves_the_field_out) {
+TEST(unreadable_info_cannot_save) {
   EditSession s;
   EditInput in = input({U(60, 120, 1, 20)}, "garbage");
   s.open(in, RNG, 4);
   s.model().select(0);
   s.model().step_temp(1);
-  SaveRequest r = s.press_save(0);
-  CHECK(r.send);
-  CHECK_STR(r.base_revision, "");
-  CHECK_STR(r.day_kind, "");
+  CHECK(s.model().dirty());
+  CHECK(s.seen_kind().empty());
+  CHECK(!s.can_save());
+  CHECK(!s.press_save(0).send);
+  CHECK(s.state() == SaveState::IDLE);
 }
 
 TEST(model_is_frozen_while_saving) {
@@ -1295,6 +1311,7 @@ TEST(damaged_arrival_is_not_saved) {
   // HA brings broken lists that happen to hold no user bands: not accepted as the answer
   EditInput in = input({});
   in.info = parse_edit_info("mon;3;r2;");
+  in.info.n = 0;
   in.lists.start.push_back(0);   // different lengths
   CHECK(s.on_state(in, 1) != EditEvent::SAVED);
 }
@@ -1360,6 +1377,343 @@ TEST(press_save_after_result_never_sends_in_the_same_tap) {
     CHECK(!s.press_save(6000).send);
     CHECK(s.state() == SaveState::IDLE);
   }
+}
+
+
+// ---------------------------------------------------------------- review of d2c98ef
+
+static EditInput with_seq(EditInput in, int64_t seq) {
+  in.info.seq = seq;
+  return in;
+}
+
+TEST(repeated_refusals_with_the_same_code_are_errors_each_time) {
+  EditSession s = open_session({U(60, 120, 1, 20)});
+  s.model().select(0);
+  s.model().step_temp(1);
+  CHECK(s.press_save(0).send);
+  CHECK(s.on_state(with_seq(input({U(60, 120, 1, 20)}, "mon;3;r1;invalid_bands"), 1), 10) == EditEvent::SAVE_FAILED);
+  CHECK(s.state() == SaveState::ERROR);
+  s.acknowledge();
+  CHECK(s.press_save(100).send);   // the same copy again
+  // the same code, but the counter rose: a new refusal
+  CHECK(s.on_state(with_seq(input({U(60, 120, 1, 20)}, "mon;3;r1;invalid_bands"), 2), 110) == EditEvent::SAVE_FAILED);
+  CHECK(s.state() == SaveState::ERROR);
+  CHECK_STR(s.error(), "invalid_bands");
+  s.acknowledge();
+  CHECK(s.press_save(200).send);
+  // the same code and the same counter: it is the old refusal
+  CHECK(s.on_state(with_seq(input({U(60, 120, 1, 20)}, "mon;3;r1;invalid_bands"), 2), 210) == EditEvent::NONE);
+  CHECK(s.state() == SaveState::SAVING);
+}
+
+TEST(residual_error_of_an_earlier_session_is_not_a_refusal) {
+  EditSession s;
+  s.open(with_seq(input({U(60, 120, 1, 20)}, "mon;3;r1;conflict"), 7), RNG, 4);
+  s.model().select(0);
+  s.model().step_temp(1);
+  CHECK(s.press_save(0).send);
+  CHECK(s.on_state(with_seq(input({U(60, 120, 1, 20)}, "mon;3;r1;conflict"), 7), 10) == EditEvent::NONE);
+  CHECK(s.state() == SaveState::SAVING);
+  CHECK(s.tick(5000));
+  CHECK(s.state() == SaveState::TIMEOUT);
+  // a counter that went DOWN (restart of Home Assistant) with the same code is also a new fact
+  EditSession u;
+  u.open(with_seq(input({U(60, 120, 1, 20)}, "mon;3;r1;conflict"), 7), RNG, 4);
+  u.model().select(0);
+  u.model().step_temp(1);
+  u.press_save(0);
+  CHECK(u.on_state(with_seq(input({U(60, 120, 1, 20)}, "mon;3;r1;conflict"), 1), 10) == EditEvent::SAVE_FAILED);
+}
+
+TEST(unreadable_info_changes_nothing) {
+  // idle, dirty
+  EditSession s = open_session({U(60, 120, 1, 20)});
+  s.model().select(0);
+  s.model().step_temp(1);
+  for (const char *bad : {"", "junk", "mon;3;r1", "funday;3;r1;", "mon;3;r1;;"}) {
+    EditInput in = input({U(0, 600, 1, 18)}, bad);   // other bands too: still nothing happens
+    CHECK(s.on_state(in, 1) == EditEvent::NONE);
+    CHECK(s.model().dirty() && s.model().size() == 1 && s.model().selected() == 0);
+    CHECK(s.notice() == Notice::NONE && s.state() == SaveState::IDLE);
+  }
+  // unavailable: empty lists, no info
+  EditInput gone;
+  CHECK(s.on_state(gone, 2) == EditEvent::NONE);
+  CHECK(s.model().dirty() && s.model().size() == 1);
+  // during SAVING: neither failure nor change elsewhere; the timeout still ends it
+  CHECK(s.press_save(10).send);
+  CHECK(s.on_state(gone, 11) == EditEvent::NONE);
+  CHECK(s.on_state(input({U(0, 600, 1, 18)}, "x"), 12) == EditEvent::NONE);
+  CHECK(s.state() == SaveState::SAVING && s.model().frozen());
+  CHECK(s.model().band(0)->centi == 2050);
+  CHECK(s.tick(5010));
+  CHECK(s.state() == SaveState::TIMEOUT);
+  // and the arrival of what was sent is still recognised afterwards
+  CHECK(s.on_state(input({U(60, 120, 1, 20.5)}, "mon;3;r2;"), 6000) == EditEvent::SAVED);
+}
+
+TEST(cut_lists_are_damaged) {
+  // the core cut every list to 3 entries but edit_n says 5
+  EditInput in = input({U(0, 60, 1, 20), U(60, 120, 1, 21), U(120, 180, 1, 22)});
+  in.info.n = 5;
+  EditModel m;
+  m.load(in);
+  CHECK(m.damaged());
+  CHECK(m.save_block() == SaveBlock::DAMAGED);
+  in.info.n = 3;
+  m.load(in);
+  CHECK(!m.damaged());
+  in.info.n = 2;   // more entries than announced
+  m.load(in);
+  CHECK(m.damaged());
+  in.info.n = -1;  // attribute absent, info valid
+  m.load(in);
+  CHECK(m.damaged());
+  in.info.n = 0;   // 0 is a real count, not "absent"
+  m.load(in);
+  CHECK(m.damaged());
+  EditInput empty = input({});
+  EditModel e;
+  e.load(empty);
+  CHECK(!e.damaged());   // 0 entries, edit_n 0
+  empty.info.n = -1;
+  e.load(empty);
+  CHECK(e.damaged());
+  empty.info = parse_edit_info("nonsense");   // info not valid: its absence is the problem, not the count
+  empty.info.n = -1;
+  e.load(empty);
+  CHECK(!e.damaged());
+  // a cut day cannot be saved
+  EditSession s;
+  EditInput cut = input({U(0, 60, 1, 20)});
+  cut.info.n = 4;
+  s.open(cut, RNG, 4);
+  s.model().select(0);
+  s.model().step_temp(1);
+  CHECK(!s.can_save());
+  CHECK(!s.press_save(0).send);
+}
+
+TEST(max_text_for_counts_every_field) {
+  // climate_entity_id + id, day_kind + kind, bands, base_revision + revision
+  CHECK(max_text_for("climate.soggiorno", "mon", "r1") == 1024 - (17 + 17 + 8 + 3 + 5 + 13 + 2));
+  CHECK(max_text_for("climate.soggiorno", "holiday", "r1") == 1024 - (17 + 17 + 8 + 7 + 5 + 13 + 2));
+  CHECK(max_text_for("c", "mon", "") == 1024 - (17 + 1 + 8 + 3 + 5));   // no revision: no such field
+  CHECK(max_text_for("", "mon", "r1") == 1024 - (17 + 255 + 8 + 3 + 5 + 13 + 2));   // unknown id: the longest
+  CHECK(max_text_for(std::string(2000, 'x'), "mon", "r1") == 0);
+  CHECK(max_text_for("climate.a", "mon", std::string(64, 'r')) == 1024 - (17 + 9 + 8 + 3 + 5 + 13 + 64));
+  // against the real rule of the action: the sum of key + value of every field must be <= 1024
+  const std::string id = "climate.camera_da_letto", kind = "tue", rev = "abcdef-12";
+  const size_t cap = max_text_for(id, kind, rev);
+  const size_t total = std::string("climate_entity_id").size() + id.size() + std::string("day_kind").size() + kind.size() +
+                       std::string("bands").size() + cap + std::string("base_revision").size() + rev.size();
+  CHECK(total == 1024);
+}
+
+TEST(encode_ceiling_is_a_parameter) {
+  std::vector<EditBand> v;
+  for (int i = 0; i < 3; ++i) {
+    EditBand b;
+    b.start = i * 60;
+    b.end = i * 60 + 30;
+    b.mode = Mode::HEAT;
+    b.has_temp = true;
+    b.centi = 2000;
+    v.push_back(b);
+  }
+  const std::string text = encode_bands(v).text;   // "00:00-00:30 heat 20; ..." 
+  CHECK(text.size() == 3 * 19 + 2 * 2);
+  CHECK(encode_bands(v, text.size()).ok);
+  EncodeResult e = encode_bands(v, text.size() - 1);
+  CHECK(!e.ok);
+  CHECK_STR(e.error, "too_long");
+  CHECK(!encode_bands(v, 0).ok);
+  CHECK(encode_bands(std::vector<EditBand>(), 0).ok);   // the empty text always fits
+}
+
+TEST(session_ceiling_follows_the_room_and_the_revision) {
+  // a day that fits with a short revision but not with a 64-character one, for a long entity id
+  std::vector<S> v;
+  for (int i = 0; i < 16; ++i) v.push_back(U(i * 60, i * 60 + 30, 1, 20.5, std::string(30, 'p')));
+  const std::string id = "climate." + std::string(100, 'x');
+  const std::string rev = std::string(64, 'r');
+  EditSession s;
+  s.open(input(v, ("mon;3;" + rev + ";").c_str()), RNG, 4, id);
+  const size_t cap = max_text_for(id, "mon", rev);
+  CHECK(s.model().max_text() == cap);
+  s.model().select(0);
+  s.model().move_end(-15);
+  const size_t len = s.model().encode().text.size() + (s.model().encode().ok ? 0 : 0);
+  (void) len;
+  EditSession t;
+  t.open(input(v, "mon;3;r;"), RNG, 4, "climate.a");
+  t.model().select(0);
+  t.model().move_end(-15);
+  CHECK(t.model().max_text() > cap);
+  // exactly at the ceiling passes, one more does not
+  std::vector<EditBand> bands = t.model().bands();
+  const size_t n = encode_bands(bands, 100000).text.size();
+  t.model().set_max_text(n);
+  CHECK(t.model().encode().ok);
+  t.model().set_max_text(n - 1);
+  CHECK(!t.model().encode().ok);
+  CHECK(t.model().save_block() == SaveBlock::TOO_LONG);
+  // after a change of revision the ceiling is recomputed
+  EditSession u;
+  u.open(input({U(60, 120, 1, 20)}, "mon;3;r;"), RNG, 4, "climate.a");
+  const size_t before = u.model().max_text();
+  u.on_state(input({U(60, 120, 1, 21)}, ("mon;3;" + std::string(40, 'r') + ";").c_str()), 1);
+  CHECK(u.model().max_text() == before - 39);
+  // unknown climate id: the conservative ceiling
+  EditSession w = open_session({U(60, 120, 1, 20)});
+  CHECK(w.model().max_text() == max_text_for("", "mon", "r1"));
+  CHECK(w.model().max_text() < EDIT_MAX_TEXT);
+}
+
+TEST(send_failed_ends_in_not_sent) {
+  EditSession s = open_session({U(60, 120, 1, 20)});
+  s.model().select(0);
+  s.model().step_temp(1);
+  CHECK(!s.send_failed());   // nothing under way
+  CHECK(s.press_save(0).send);
+  CHECK(s.send_failed());
+  CHECK(s.state() == SaveState::ERROR);
+  CHECK_STR(s.error(), "not_sent");
+  CHECK(!s.model().frozen());
+  CHECK(s.model().dirty());
+  CHECK(!s.send_failed());   // once
+  CHECK(!s.tick(100000));    // no timeout afterwards
+  CHECK(!s.press_save(5).send);   // acknowledged by this tap
+  CHECK(s.state() == SaveState::IDLE);
+  CHECK(s.press_save(6).send);    // and it can be tried again
+  EditSession c;
+  CHECK(!c.send_failed());
+}
+
+TEST(page_survives_a_reload_without_selection) {
+  std::vector<S> v;
+  for (int i = 0; i < 8; ++i) v.push_back(U(i * 100, i * 100 + 50, 1, 20));
+  EditSession s;
+  s.open(input(v), RNG, 3);
+  CHECK(s.model().next_page());
+  CHECK(s.model().page() == 1);
+  v[0].temp = 21;
+  CHECK(s.on_state(input(v, "mon;3;r2;"), 1) == EditEvent::RELOADED);
+  CHECK(s.model().page() == 1);
+  // the page is gone: clamped
+  std::vector<S> few(v.begin(), v.begin() + 2);
+  CHECK(s.on_state(input(few, "mon;3;r3;"), 2) == EditEvent::RELOADED);
+  CHECK(s.model().page() == 0);
+  // a new session starts on the first page
+  CHECK(s.model().size() == 2);
+  s.open(input(v), RNG, 3);
+  s.model().next_page();
+  CHECK(s.model().page() == 1);
+  s.open(input(v), RNG, 3);
+  CHECK(s.model().page() == 0);
+  // a new day: first page
+  s.model().next_page();
+  CHECK(s.on_state(input(v, "tue;3;r3;"), 3) == EditEvent::DAY_CHANGED);
+  CHECK(s.model().page() == 0);
+}
+
+TEST(select_last_row_of_a_page) {
+  std::vector<S> v;
+  for (int i = 0; i < 7; ++i) v.push_back(U(i * 100, i * 100 + 50, 1, 20));
+  EditModel m = model_of(v);
+  m.set_rows_per_page(3);
+  CHECK(m.select(2));
+  CHECK(m.page() == 0);   // the last row of page 0 stays on page 0
+  CHECK(m.select(3));
+  CHECK(m.page() == 1);   // the first of page 1
+  CHECK(m.select(5));
+  CHECK(m.page() == 1);
+  CHECK(m.select(6));
+  CHECK(m.page() == 2);
+  CHECK(m.page_first() == 6 && m.page_rows() == 1);
+}
+
+TEST(tick_across_the_wrap_does_not_expire_early) {
+  EditSession s = open_session({U(60, 120, 1, 20)});
+  s.model().select(0);
+  s.model().step_temp(1);
+  CHECK(s.press_save(0xFFFFFF00u).send);
+  CHECK(!s.tick(0xFFFFFFF0u));   // 240 ms later
+  CHECK(!s.tick(0x00000010u));   // after the wrap: 272 ms
+  CHECK(s.state() == SaveState::SAVING);
+  CHECK(!s.tick(0xFFFFFF00u + 4999u));
+  CHECK(s.tick(0xFFFFFF00u + 5000u));
+}
+
+TEST(open_after_error_clears_it) {
+  EditSession s = open_session({U(60, 120, 1, 20)});
+  s.model().select(0);
+  s.model().step_temp(1);
+  s.press_save(0);
+  s.on_state(input({U(60, 120, 1, 20)}, "mon;3;r1;conflict"), 1);
+  CHECK(s.state() == SaveState::ERROR && s.error() == "conflict");
+  s.open(input({U(60, 120, 1, 20)}), RNG, 4);
+  CHECK(s.state() == SaveState::IDLE);
+  CHECK_STR(s.error(), "");
+  CHECK(!s.model().dirty());
+}
+
+TEST(step_temp_off_the_grid) {
+  EditModel m = model_of({U(60, 120, 1, 20.3), U(120, 180, 1, 20.3), U(180, 240, 1, 20.3)});
+  m.set_range(make_range(5, 35, 0.5));
+  m.select(0);
+  CHECK(m.step_temp(-1).changed);
+  CHECK(m.band(0)->centi == 2000);   // 20.3 -> 20.5 -> 20.0
+  m.select(1);
+  CHECK(m.step_temp(1).changed);
+  CHECK(m.band(1)->centi == 2100);
+  m.select(2);
+  CHECK(m.step_temp(-100).changed);
+  CHECK(m.band(2)->centi == 500);
+}
+
+TEST(sent_is_normalized_and_the_merged_arrival_is_saved) {
+  // two adjacent equal bands are sent merged; HA has them merged: SAVED. Unmerged: SAVED too.
+  for (int merged = 0; merged < 2; ++merged) {
+    EditSession s = open_session({U(0, 60, 1, 20), U(180, 240, 2, 25)});
+    s.model().select(0);
+    CHECK(s.model().add().changed);   // 60-120 heat 20: touches the first
+    CHECK(s.model().size() == 3);
+    SaveRequest r = s.press_save(0);
+    CHECK(r.send);
+    CHECK_STR(r.bands, "00:00-02:00 heat 20; 03:00-04:00 cool 25");
+    EditInput in = merged ? input({U(0, 120, 1, 20), U(180, 240, 2, 25)}, "mon;3;r2;")
+                          : input({U(0, 60, 1, 20), U(60, 120, 1, 20), U(180, 240, 2, 25)}, "mon;3;r2;");
+    CHECK(s.on_state(in, 1) == EditEvent::SAVED);
+    CHECK(!s.model().dirty());
+  }
+}
+
+TEST(reload_unfreezes_the_model) {
+  EditSession s = open_session({U(60, 120, 1, 20)});
+  s.model().select(0);
+  s.model().step_temp(1);
+  s.press_save(0);
+  CHECK(s.model().frozen());
+  // somebody else saved while we were saving
+  CHECK(s.on_state(input({U(60, 120, 1, 23)}, "mon;3;r2;"), 1) == EditEvent::SAVE_FAILED);
+  CHECK(!s.model().frozen());
+  s.model().select(0);
+  CHECK(s.model().step_temp(1).changed);
+  // a day change while saving
+  EditSession d = open_session({U(60, 120, 1, 20)});
+  d.model().select(0);
+  d.model().step_temp(1);
+  d.press_save(0);
+  d.on_state(input({U(60, 120, 1, 20)}, "tue;3;r1;"), 1);
+  CHECK(!d.model().frozen());
+}
+
+TEST(edit_title_with_zero_rooms) {
+  CHECK_STR(edit_title("Casa", 0), "Casa - 0 rooms");
+  CHECK_STR(edit_title("", 0), "0 rooms");
+  CHECK_STR(edit_title("Casa", 0, "stanza", "stanze"), "Casa - 0 stanze");
 }
 
 // ------------------------------------------------------------------------------------------------ panel_allowed

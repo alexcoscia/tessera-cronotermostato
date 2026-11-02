@@ -39,7 +39,7 @@ static double number(JsonVariantConst v, double fallback) {
 // Only as many entries as the logic ever looks at, and the vectors live for the length of the call.
 static DayLists read_lists(JsonObjectConst r) {
   DayLists l;
-  JsonArrayConst s = r["today_start"], e = r["today_end"], m = r["today_mode"], t = r["today_temp"], a = r["today_auto"];
+  JsonArrayConst s = r["today_start"], e = r["today_end"], m = r["today_mode"], t = r["today_temp"], a = r["today_flags"];   // flags: bit 1 = automatic band
   const size_t n = std::min({s.size(), e.size(), m.size(), t.size(), MAX_LIST_ITEMS});
   l.start.reserve(n);
   l.end.reserve(n);
@@ -51,7 +51,7 @@ static DayLists read_lists(JsonObjectConst r) {
     l.end.push_back(number(e[i], NAN));
     l.mode.push_back(number(m[i], 0));
     l.temp.push_back(number(t[i], NO_TEMP));
-    l.autom.push_back(i < a.size() ? number(a[i], 0) : 0);
+    l.autom.push_back(i < a.size() ? (double) (((int) clamp_to(number(a[i], 0), 0, 255, 0)) & 1) : 0);
   }
   return l;
 }
@@ -671,7 +671,7 @@ class DayCard : public tessera::Card {
     JsonObjectConst r = data["entities"]["room"]["attributes"];
     step_ = number(data["attributes"]["target_temp_step"], 0.5);
     program_ = roomy::text(view.program);
-    holiday_ = r["holiday"] | false;
+    holiday_ = std::string(r["edit_info"] | "").compare(0, 8, "holiday;") == 0;   // today_kind, first field of edit_info
     note_key_ = nullptr;
     n_ = 0;
     switch (view.pill) {

@@ -13,7 +13,12 @@
 //                 detection of a change made elsewhere (program revision) or of a new day;
 //   - panel_allowed  whether the edit panel may be offered at all.
 // All times are milliseconds given by the caller (a wrapping uint32_t counter is fine).
+#include <algorithm>
+#include <climits>
+#include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <utility>
 #include <vector>
@@ -30,7 +35,8 @@ constexpr int EDIT_MIN_MINUTES = 15;             // shortest band
 constexpr int EDIT_ADD_MINUTES = 60;             // length of a new band, and the smallest gap that takes one
 constexpr int EDIT_BIG_STEP = 60;                // the keys: +-1 h ...
 constexpr int EDIT_SMALL_STEP = 15;              // ... and +-15 min
-constexpr size_t EDIT_MAX_TEXT = 960;            // characters of `bands` (the action allows 1024 bytes in all)
+constexpr size_t EDIT_ACTION_BYTES = 1024;       // plugin_action.h: key + value of every field, all together
+constexpr size_t EDIT_MAX_TEXT = 960;            // fallback ceiling of `bands` when nothing better is known
 constexpr size_t EDIT_MAX_PRESET = 40;           // as the integration
 constexpr int EDIT_MIN_ROWS = 3, EDIT_MAX_ROWS = 14;   // rows per page, by the size of the screen
 constexpr uint32_t SAVE_TIMEOUT_MS = 5000;
@@ -48,6 +54,9 @@ struct EditInfo {
   int rooms = -1;          // rooms that use the program (the edit is shared by all of them); -1 unknown
   std::string revision;    // opaque token of the program revision: [A-Za-z0-9._-]{1,64}
   std::string error;       // code of the last refused set_day, "" none; text that is not a code reads "unknown"
+  // Not in the text: the tile fills them from the attributes `edit_seq` and `edit_n` of the room sensor.
+  int64_t seq = 0;         // counter of the refused set_day of the room (rises on every refusal, even with the same code)
+  int n = -1;              // number of entries of the today_* lists (`edit_n`); -1: the attribute is absent
 };
 
 namespace detail {
@@ -101,7 +110,21 @@ inline EditInfo parse_edit_info(const std::string &text) {
     info.error = code ? f[3] : "unknown";
   }
   info.valid = ok;
+  if (!ok) {   // nothing of a text that is not whole is trusted (the error code is still readable)
+    info.kind.clear();
+    info.rooms = -1;
+    info.revision.clear();
+  }
   return info;
+}
+
+// The longest `bands` that fits the action: 1024 bytes minus key + value of the other fields (climate_entity_id, day_kind,
+// base_revision when there is one) and the key of `bands` itself. An unknown climate id counts as the longest entity id (255).
+inline size_t max_text_for(const std::string &climate_id, const std::string &day_kind, const std::string &revision) {
+  const size_t id = climate_id.empty() ? 255 : climate_id.size();
+  size_t used = 17 + id + 8 + day_kind.size() + 5;   // "climate_entity_id", "day_kind", "bands"
+  if (!revision.empty()) used += 13 + revision.size();   // "base_revision"
+  return used >= EDIT_ACTION_BYTES ? 0 : EDIT_ACTION_BYTES - used;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -147,12 +170,13 @@ inline const char *save_block_code(SaveBlock b) {
   }
 }
 
-// The lists of the room sensor, as the tile reads them. `preset` and `locked` are parallel to `lists` (one entry per band,
-// automatic ones included).
+// The lists of the room sensor, as the tile reads them. `preset` and `flags` are parallel to `lists` (one entry per band,
+// automatic ones included). `info.n` must be the length of the lists: the core cuts all lists to the same shorter length
+// when they are too big, and a cut day must never be saved.
 struct EditInput {
-  DayLists lists;
+  DayLists lists;   // start, end, mode, temp (`autom` is not used: the flags below say it)
   std::vector<std::string> preset;
-  std::vector<double> locked;
+  std::vector<double> flags;   // `today_flags`: bit 1 automatic band, bit 2 locked band
   EditInfo info;
   std::string program_name;
 };
@@ -212,9 +236,9 @@ struct EncodeResult {
 };
 
 // `HH:MM-HH:MM mode [temp] [preset=NAME]` joined by "; ". 24:00 as an end, the dot in the temperature, the preset as read.
-// "invalid": a band that cannot be written safely (preset outside [A-Za-z0-9_-]{1,40}, temperature that is negative, 1000
+// `max_text`: the longest `bands` that the action takes (max_text_for). "invalid": a band that cannot be written safely (preset outside [A-Za-z0-9_-]{1,40}, temperature that is negative, 1000
 // or over, heat/cool with neither temperature nor preset, off with one, start >= end, overlap, out of the day).
-inline EncodeResult encode_bands(const std::vector<EditBand> &bands) {
+inline EncodeResult encode_bands(const std::vector<EditBand> &bands, size_t max_text = EDIT_MAX_TEXT) {
   EncodeResult r;
   std::string text;
   int covered = 0;
@@ -232,7 +256,7 @@ inline EncodeResult encode_bands(const std::vector<EditBand> &bands) {
     text += format_clock(b.start) + "-" + format_clock(b.end) + " " + mode_name(b.mode);
     if (b.has_temp) text += " " + temp_text(b.centi);
     if (!b.preset.empty()) text += " preset=" + b.preset;
-    if (text.size() > EDIT_MAX_TEXT) {
+    if (text.size() > max_text) {
       r.error = "too_long";
       return r;
     }
@@ -252,14 +276,21 @@ class EditModel {
     std::vector<EditBand> out;
     damaged_ = false;
     const DayLists &l = in.lists;
-    const size_t n0 = std::min({l.start.size(), l.end.size(), l.mode.size(), l.temp.size(), l.autom.size()});
-    const size_t big = std::max({l.start.size(), l.end.size(), l.mode.size(), l.temp.size(), l.autom.size()});
+    const size_t n0 = std::min({l.start.size(), l.end.size(), l.mode.size(), l.temp.size()});
+    const size_t big = std::max({l.start.size(), l.end.size(), l.mode.size(), l.temp.size()});
     const size_t n = std::min(n0, MAX_LIST_ITEMS);
-    if (big != n0 || n0 > MAX_LIST_ITEMS || in.preset.size() != n0 || in.locked.size() != n0) damaged_ = true;
+    if (big != n0 || n0 > MAX_LIST_ITEMS || in.preset.size() != n0 || in.flags.size() != n0) damaged_ = true;
+    // The core cuts every list to the same shorter length when they are too big: `edit_n` tells the real count.
+    if (in.info.n >= 0 ? (size_t) in.info.n != n0 : in.info.valid) damaged_ = true;
     int covered = 0;
     std::vector<std::pair<EditBand, size_t>> raw;
     for (size_t i = 0; i < n; ++i) {
-      if (std::isfinite(l.autom[i]) && l.autom[i] != 0) continue;   // automatic: a gap, not a row
+      int flags = 0;
+      if (i < in.flags.size() && std::isfinite(in.flags[i]) && in.flags[i] >= 0 && in.flags[i] <= 255 && in.flags[i] == std::floor(in.flags[i]))
+        flags = (int) in.flags[i];
+      else
+        damaged_ = true;   // missing or not a small whole number: nothing is known about the band
+      if (flags & 1) continue;   // automatic: a gap, not a row
       EditBand b;
       if (!detail::clean_minutes(l.start[i], b.start) || !detail::clean_minutes(l.end[i], b.end) || b.start >= MINUTES_PER_DAY ||
           b.end <= b.start) {
@@ -283,7 +314,7 @@ class EditModel {
         b.preset = in.preset[i];
         if (!b.preset.empty() && !detail::preset_ok(b.preset)) b.locked = true;
       }
-      if (i < in.locked.size() && std::isfinite(in.locked[i]) && in.locked[i] != 0) b.locked = true;
+      if (flags & 2) b.locked = true;
       if (b.mode == Mode::OFF && (b.has_temp || !b.preset.empty())) {   // off takes neither
         b.has_temp = false;
         b.preset.clear();
@@ -313,11 +344,11 @@ class EditModel {
     }
     work_ = out;
     original_ = std::move(out);
-    selected_ = -1;
-    page_ = 0;
+    selected_ = -1;   // back to the list; the page stays when it still exists
     frozen_ = false;
     clamp_page();
   }
+  void first_page() { page_ = 0; }
 
   // --- the copy ------------------------------------------------------------------------------------------------
   size_t size() const { return work_.size(); }
@@ -486,7 +517,10 @@ class EditModel {
     return SaveBlock::NONE;
   }
   // The text to send: the normalized content (touching equal neighbours become one band, as the integration keeps them).
-  EncodeResult encode() const { return encode_bands(normalized(work_)); }
+  EncodeResult encode() const { return encode_bands(normalized(work_), max_text_); }
+  // The ceiling of `bands` for this room, day and revision (max_text_for); the session keeps it up to date.
+  void set_max_text(size_t n) { max_text_ = n; }
+  size_t max_text() const { return max_text_; }
 
  private:
   // The selected band if it can be changed now; otherwise `refusal_` says why (nothing selected: nothing happens).
@@ -528,6 +562,7 @@ class EditModel {
   std::vector<EditBand> work_, original_;
   int selected_ = -1, page_ = 0, rows_ = EDIT_MIN_ROWS;
   bool damaged_ = false, frozen_ = false;
+  size_t max_text_ = EDIT_MAX_TEXT;
   SetpointRange range_;
   EditResult refusal_;
 };
@@ -573,8 +608,10 @@ class EditSession {
   bool opened() const { return opened_; }
 
   // Enter the edit mode with what the sensor says now.
-  void open(const EditInput &in, const SetpointRange &range, int rows) {
+  void open(const EditInput &in, const SetpointRange &range, int rows, const std::string &climate_id = "") {
     opened_ = true;
+    model_ = EditModel();   // nothing of an earlier session stays (page, freeze)
+    climate_id_ = climate_id;
     model_.set_range(range);
     model_.set_rows_per_page(rows);
     load(in);
@@ -599,7 +636,9 @@ class EditSession {
   std::string title(const char *one = "room", const char *many = "rooms") const { return edit_title(program_, rooms_, one, many); }
 
   // Save is possible now: nothing under way, something to save, nothing locked.
-  bool can_save() const { return opened_ && state_ == SaveState::IDLE && model_.save_block() == SaveBlock::NONE; }
+  bool can_save() const {
+    return opened_ && !kind_.empty() && state_ == SaveState::IDLE && model_.save_block() == SaveBlock::NONE;
+  }
   SaveBlock save_block() const { return model_.save_block(); }
 
   // The Save key. In IDLE and possible: SAVING and the request (exactly once). SAVING: ignored. SAVED/ERROR/TIMEOUT: this
@@ -613,7 +652,7 @@ class EditSession {
       return r;
     }
     notice_ = Notice::NONE;
-    if (model_.save_block() != SaveBlock::NONE) return r;
+    if (kind_.empty() || model_.save_block() != SaveBlock::NONE) return r;
     const EncodeResult e = model_.encode();
     if (!e.ok) return r;
     sent_ = normalized(model_.bands());
@@ -637,6 +676,16 @@ class EditSession {
     }
   }
 
+  // `tessera::action` answered false (the fields did not fit, or the action was refused): nothing was sent. SAVING ends in
+  // ERROR with the code "not_sent". True when the state changed.
+  bool send_failed() {
+    if (!opened_ || state_ != SaveState::SAVING) return false;
+    state_ = SaveState::ERROR;
+    error_ = "not_sent";
+    model_.set_frozen(false);
+    return true;
+  }
+
   // From the tile's tick: 5 s after the send without an answer. True when the state changed (repaint).
   bool tick(uint32_t now) {
     if (!opened_ || state_ != SaveState::SAVING || !expired(now, sent_at_, SAVE_TIMEOUT_MS)) return false;
@@ -649,9 +698,14 @@ class EditSession {
   // The sensor changed. Order: another day; the answer to a save; changes made elsewhere.
   EditEvent on_state(const EditInput &in, uint32_t /*now*/) {
     if (!opened_) return EditEvent::NONE;
+    // The sensor is unavailable or its edit_info unreadable for a moment: nothing is known, nothing is touched (the
+    // copy stays, a save under way ends by its timeout, panel_allowed hides the panel).
+    if (!in.info.valid) return EditEvent::NONE;
     const std::string error_before = baseline_error_;
-    if (in.info.valid && in.info.kind != kind_) {
+    const int64_t seq_before = baseline_seq_;
+    if (in.info.kind != kind_) {
       reload(in);
+      first_page_after_day();
       state_ = SaveState::IDLE;
       error_.clear();
       notice_ = Notice::DAY_CHANGED;
@@ -670,14 +724,16 @@ class EditSession {
       return EditEvent::SAVED;
     }
     if (state_ == SaveState::SAVING) {
-      if (!in.info.error.empty() && in.info.error != error_before) {
+      if (!in.info.error.empty() && (in.info.error != error_before || in.info.seq != seq_before)) {
         baseline_error_ = in.info.error;
+        baseline_seq_ = in.info.seq;
         state_ = SaveState::ERROR;
         error_ = in.info.error;
         model_.set_frozen(false);
         return EditEvent::SAVE_FAILED;
       }
       baseline_error_ = in.info.error;
+      baseline_seq_ = in.info.seq;
       if (changed_elsewhere(in, fresh)) {   // somebody else saved in the meantime
         reload(in);
         state_ = SaveState::IDLE;
@@ -688,6 +744,7 @@ class EditSession {
       return EditEvent::NONE;
     }
     baseline_error_ = in.info.error;
+    baseline_seq_ = in.info.seq;
     if (!changed_elsewhere(in, fresh)) return EditEvent::NONE;
     if (model_.dirty()) {
       reload(in);
@@ -705,7 +762,7 @@ class EditSession {
  private:
   // The bands or the program revision are not the ones the copy started from.
   bool changed_elsewhere(const EditInput &in, const EditModel &fresh) const {
-    if (in.info.valid && !revision_.empty() && in.info.revision != revision_) return true;
+    if (!revision_.empty() && in.info.revision != revision_) return true;
     return !same_bands(fresh.bands(), model_.original()) || fresh.damaged() != model_damaged_;
   }
   void load(const EditInput &in) {
@@ -716,7 +773,10 @@ class EditSession {
     rooms_ = in.info.valid ? in.info.rooms : -1;
     program_ = in.program_name;
     baseline_error_ = in.info.error;
+    baseline_seq_ = in.info.seq;
+    model_.set_max_text(max_text_for(climate_id_, kind_, revision_));
   }
+  void first_page_after_day() { model_.first_page(); }
   // A new base: the copy, the selection (gone) and the revision are the new ones.
   void reload(const EditInput &in) {
     model_.set_frozen(false);
@@ -727,7 +787,8 @@ class EditSession {
   bool opened_ = false, model_damaged_ = false;
   SaveState state_ = SaveState::IDLE;
   Notice notice_ = Notice::NONE;
-  std::string kind_, revision_, program_, error_, baseline_error_;
+  std::string kind_, revision_, program_, error_, baseline_error_, climate_id_;
+  int64_t baseline_seq_ = 0;
   int rooms_ = -1;
   std::vector<EditBand> sent_;
   uint32_t sent_at_ = 0;
