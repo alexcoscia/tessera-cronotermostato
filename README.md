@@ -14,13 +14,12 @@ the list of today's bands.
   Italian Home Assistant `sensor.<room>_programma`).
 - The screen must be allowed to call two Home Assistant actions: `cronotermostato.set_manual` and
   `cronotermostato.resume_auto`. The keys and the pill send them.
-- A screen with two or more columns in its layout (see "Limits").
 
 ## Set up
 
 1. In the Tessera app, open **Plugins** and enable **Cronotermostato** for the screen. The screen builds once.
-2. Open the screen's **Layout** and place the **Room program** tile on a page. It needs at least 2 columns by 2 rows and
-   is not offered larger than 3 columns by 2 rows.
+2. Open the screen's **Layout** and place the **Room program** tile on a page. It starts at one cell and you can grow it
+   with the handles up to 3 columns by 2 rows; the full look needs about 2x2 (see "Sizes").
 3. In the tile's inspector, choose the room's **climate entity** (for example `climate.living_room`).
 4. Choose the **room program sensor**. The list shows every sensor: pick the one of the same room that ends in
    `_program` (`_programma` in Italian).
@@ -37,6 +36,22 @@ the list of today's bands.
   "No program", "Problem" or "Unavailable". A line "Then Heating 21.5 at 17:00" shows when there is room for it.
 - A bar with today's bands, from 00:00 to 24:00: amber for heating, blue for cooling, grey for off, and a dark tick for
   now.
+
+## Sizes
+
+The tile is offered from 1x1 up to 3x2. It starts at 1x1 because the layout editor starts a tile at one cell and grows it
+one axis at a time: a larger minimum would show no resize handles at all. What it draws depends on the pixels of the
+cell on your screen, not on the number of cells, so the same size can look different on a small and on a large screen.
+
+| Room it has | What is drawn |
+|---|---|
+| Tall and wide enough (a 2x2 or more; also a 1x1 or 2x1 on a large screen) | The full look above: name, target, temperature now, "Then" line, state line and bar, with the **+** and **-** keys. |
+| Wide but low (a 2x1 on a small screen) | **+** at the left, the target between, **-** at the right. No bar and no state line; the temperature now only if it fits under the target (the dot then stands beside the target). A tap between the keys opens the list of today's bands. |
+| Narrow but tall (a 1x2, or a 1x1) | The target with the dot beside it, and the bar of today's bands under it. No keys. A tap anywhere opens the list of bands. |
+| Narrow and low (a 1x1 on a small screen) | The target (the temperature now if the room has no target) and the dot of heating or cooling beside it, with the bar under it when the height holds it (on the screens of the bench it does). A tap anywhere opens the list of bands. |
+
+Without the keys the tile never commands a temperature. Without the state line a manual override is not shown on the tile
+(the list of bands opened by a tap does not show it either): use a 2x2 for a room you force often.
 
 ## What a tap does
 
@@ -55,8 +70,9 @@ the list of today's bands.
 - The keys are also dimmed and do nothing when the room has no program assigned, is paused, is unavailable, or the tile
   has no usable climate entity.
 - There is no separate "Manual" key: pressing **+** or **-** already forces the room, and the pill then says "Manual".
-- The tile is offered from 2x2 up to 3x2 only.
-- It does not fit a screen that has only one column in its layout (a vertical CYD or the Waveshare 4.3-inch).
+- The tile is offered from 1x1 up to 3x2. The keys and the full look need room: on a small screen only the 2x1 keeps the
+  keys, and a 1x1 or 1x2 is read-only (see "Sizes").
+- On a screen with one column in its layout (a vertical CYD or the Waveshare 4.3-inch) only 1x1 and 1x2 fit (read-only, see "Sizes"); the 2x1 and larger do not.
 - The times in the list of bands are always 24-hour ("17:00"), also on a screen set to AM/PM. The pill and the "then"
   line follow the screen's own clock format.
 - With more bands than the list has rows, its last row says how many are left out ("+3 more"), and the rows shown are

@@ -70,7 +70,7 @@ Dopo ogni modifica: apri il plugin nella scheda Plugins dello schermo e premi **
 Poi:
 
 1. Abilita il plugin per lo schermo; l'app costruisce il firmware (minuti) e aggiorna via Wi-Fi.
-2. In Layout metti il tile **Programma stanza** (almeno 2x2, al massimo 3x2).
+2. In Layout metti il tile **Programma stanza** (da 1x1 a 3x2; per i tasti e la forma completa serve circa 2x2, vedi "Sizes" nel README).
 3. Nell'ispettore scegli `climate.termostato_casa` e il suo sensore `sensor.<stanza>_programma`.
 4. Controlla nel dispositivo il permesso per le azioni HA `cronotermostato.set_manual` e `cronotermostato.resume_auto`.
 

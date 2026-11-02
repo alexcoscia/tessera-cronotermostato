@@ -1209,9 +1209,15 @@ TEST(now_marker_pointer_matches_vector) {
 
 static LayoutInput li(int h, bool name = true) {
   LayoutInput in;
+  in.width = 1000;
   in.height = h;
   in.digits_h = 48;
   in.value_h = 40;
+  in.digits_w = 130;
+  in.value_w = 100;
+  in.key_w = 60;
+  in.dot_w = 14;
+  in.touch_h = 40;
   in.body_h = 17;
   in.tick_h = 14;
   in.gap = 4;
@@ -1223,6 +1229,14 @@ static void check_layout_sane(const LayoutPlan &p, const LayoutInput &in) {
   CHECK(p.name_y >= 0 && p.then_y >= 0 && p.pill_y >= 0 && p.bar_y >= 0 && p.region_top >= 0 && p.mid_y >= 0);
   CHECK(p.region_h >= 1);
   if (!p.fits) return;
+  if (p.family != Family::FULL) {
+    // The compact plans: the target (and the "now" line when drawn) inside the region, the bar (COLUMN) under it.
+    CHECK(p.mid_y + p.value_h + (p.now_line ? in.body_h : 0) <= p.region_top + p.region_h || p.region_h < p.value_h);
+    CHECK(!p.name && !p.then && !p.pill);
+    CHECK(p.keys == (p.family == Family::ROW) && p.bar == (p.family == Family::COLUMN));
+    if (p.bar) CHECK(p.mid_y + p.value_h <= p.bar_y && p.bar_y + in.tick_h == in.height);
+    return;
+  }
   // Nothing overlaps from the top: name, then the digits and the "now" line, then "then", the pill and the bar.
   CHECK(p.mid_y >= p.region_top);
   CHECK(p.mid_y + p.value_h + in.body_h <= (p.then ? p.then_y : p.pill_y));
@@ -1244,6 +1258,18 @@ TEST(choose_layout_monotone_in_height) {
     }
     CHECK(choose_layout(li(400, name)).rank == (name ? 0 : 2));
   }
+  // Narrow tiles too (no room for the keys, a room for the digits, a room for neither): taller never gives a poorer plan.
+  for (int width : {20, 60, 120, 151, 200, 250, 302, 1000}) {
+    int last = 99;
+    for (int h = 0; h <= 400; ++h) {
+      LayoutInput in = li(h);
+      in.width = width;
+      const LayoutPlan p = choose_layout(in);
+      CHECK(p.rank <= last);
+      last = p.rank;
+      check_layout_sane(p, in);
+    }
+  }
 }
 
 TEST(choose_layout_picks_the_richest_that_fits) {
@@ -1261,11 +1287,11 @@ TEST(choose_layout_picks_the_richest_that_fits) {
 }
 
 TEST(choose_layout_degrades_without_negative_positions) {
-  for (int h : {-20, 0, 1, 10, 50, 80}) {
+  for (int h : {-20, 0, 1, 10, 30, 39}) {
     for (bool name : {true, false}) {
       const LayoutInput in = li(h, name);
       const LayoutPlan p = choose_layout(in);
-      CHECK(!p.fits && p.rank == 7 && !p.digits && !p.name && !p.then);
+      CHECK(!p.fits && p.family == Family::TINY && p.rank == 10 && !p.digits && !p.name && !p.then && !p.keys && !p.bar);
       check_layout_sane(p, in);
     }
   }
@@ -1274,6 +1300,107 @@ TEST(choose_layout_degrades_without_negative_positions) {
   in.body_h = 0;
   in.tick_h = 0;
   check_layout_sane(choose_layout(in), in);
+  in.width = -5;
+  check_layout_sane(choose_layout(in), in);
+}
+
+// The families by pixels. Tile sizes are those of the bench: cyd 151 x 55 per cell, guition 224 x 124.
+static LayoutInput tile_px(int w, int h, int key_w = 62) {
+  LayoutInput in = li(h);
+  in.width = w;
+  in.key_w = key_w;
+  in.digits_w = 140;
+  in.value_w = 85;
+  in.dot_w = 14;
+  in.now_w = 90;
+  in.touch_h = 39;
+  return in;
+}
+
+TEST(choose_layout_full_look_needs_the_width_for_the_keys_too) {
+  // Tall enough for the poorest FULL plan (100) but 2 keys + gaps (132) and the target (85) do not fit in 200 px.
+  LayoutPlan p = choose_layout(tile_px(200, 124));
+  CHECK(p.family != Family::FULL);
+  p = choose_layout(tile_px(302, 110));   // cyd 2x2
+  CHECK(p.family == Family::FULL && p.keys && p.bar && p.pill && p.now_line && p.digits);
+  p = choose_layout(tile_px(448, 248));   // guition 2x2
+  CHECK(p.family == Family::FULL && p.rank <= 1);
+  // Digits need 2*(62+4) + 140 = 272 across; the VALUE face 217.
+  p = choose_layout(tile_px(250, 124));
+  CHECK(p.family == Family::FULL && !p.digits);
+  p = choose_layout(tile_px(272, 124));
+  CHECK(p.family == Family::FULL && p.digits);
+}
+
+TEST(choose_layout_tiny_is_the_target_alone) {
+  LayoutInput in = tile_px(151, 55);   // cyd 1x1
+  LayoutPlan p = choose_layout(in);
+  CHECK(p.family == Family::TINY && p.rank == 10 && p.fits);
+  CHECK(!p.keys && !p.bar && !p.pill && !p.name && !p.then && !p.now_line);
+  CHECK(!p.digits);                                   // the digits (140) and the dot (14) and the gaps do not fit 151
+  CHECK(p.mid_y == (55 - 40) / 2 && p.value_h == 40);
+  p = choose_layout(tile_px(224, 52, 74));            // wide enough for the digits and the dot, no room for a bar under them
+  CHECK(p.family == Family::TINY && p.digits && p.value_h == 48 && p.mid_y == 2);
+  p = choose_layout(tile_px(100, 52));                // too narrow for the digits with a dot
+  CHECK(p.family == Family::TINY && !p.digits);
+  // The VALUE face does not fit the height: still TINY, flagged as not fitting, nothing negative.
+  p = choose_layout(tile_px(151, 30));
+  CHECK(p.family == Family::TINY && !p.fits && p.mid_y == 0);
+}
+
+TEST(choose_layout_row_keeps_the_keys_and_drops_the_rest) {
+  LayoutInput in = tile_px(302, 55);   // cyd 2x1
+  LayoutPlan p = choose_layout(in);
+  CHECK(p.family == Family::ROW && p.rank == 8 && p.fits && p.keys);
+  CHECK(!p.bar && !p.pill && !p.name && !p.then && !p.now_line);   // 55 < 40 + 4 + 17
+  CHECK(p.digits);                                                 // 302 >= 272 and 55 >= 48
+  CHECK(p.mid_y == (55 - 48) / 2);
+  p = choose_layout(tile_px(302, 38));   // lower than a key can be pressed (39): no keys
+  CHECK(p.family != Family::ROW);
+  p = choose_layout(tile_px(302, 39));   // nor lower than the VALUE face (40)
+  CHECK(p.family != Family::ROW);
+  p = choose_layout(tile_px(302, 40));
+  CHECK(p.family == Family::ROW && !p.digits && p.value_h == 40);
+  p = choose_layout(tile_px(250, 70));   // narrower: the VALUE face between the keys
+  CHECK(p.family == Family::ROW && !p.digits);
+  p = choose_layout(tile_px(302, 70));   // the "now" line fits below the target (48 + 4 + 17 = 69)
+  CHECK(p.family == Family::ROW && p.now_line && p.mid_y == (70 - (48 + 17)) / 2);
+  LayoutInput tall_keys = tile_px(302, 55);   // keys that need 7 mm = 60 px: a tile 55 high has none
+  tall_keys.touch_h = 60;
+  CHECK(choose_layout(tall_keys).family != Family::ROW);
+  tall_keys.height = 60;
+  CHECK(choose_layout(tall_keys).family == Family::ROW);
+  p = choose_layout(tile_px(220, 70));   // keys and the target fit (217) but not the "now" line (222): no line, the dot beside
+  CHECK(p.family == Family::ROW && !p.now_line);
+  p = choose_layout(tile_px(220, 124));  // the same for the full look, which needs the "now" line: the row
+  CHECK(p.family == Family::ROW && !p.now_line);
+  p = choose_layout(tile_px(210, 70));   // too narrow for the keys and the target: the column
+  CHECK(p.family != Family::ROW);
+}
+
+TEST(choose_layout_column_is_target_dot_and_bar) {
+  LayoutInput in = tile_px(151, 110);   // cyd 1x2
+  LayoutPlan p = choose_layout(in);
+  CHECK(p.family == Family::COLUMN && p.rank == 9 && p.fits && p.bar && !p.keys && !p.pill && !p.now_line);
+  CHECK(p.bar_y == 110 - 14);
+  CHECK(p.mid_y + p.value_h <= p.bar_y);
+  p = choose_layout(tile_px(151, 40 + 4 + 14));   // exactly the VALUE face, a gap and the bar
+  CHECK(p.family == Family::COLUMN && !p.digits && p.fits);
+  p = choose_layout(tile_px(151, 40 + 4 + 14 - 1));   // one pixel less: no bar
+  CHECK(p.family == Family::TINY);
+  p = choose_layout(tile_px(224, 248, 74));   // guition 1x2: keys (2 x 78) and the target do not fit 224; digits + dot do
+  CHECK(p.family == Family::COLUMN && p.digits);
+}
+
+TEST(choose_layout_never_picks_a_poorer_plan_for_a_bigger_tile) {
+  // Across widths and heights of the real boards, a tile at least as wide and as tall never gets a higher rank.
+  for (int w = 40; w <= 520; w += 7)
+    for (int h = 0; h <= 300; h += 5) {
+      const int r = choose_layout(tile_px(w, h)).rank;
+      CHECK(choose_layout(tile_px(w, h + 5)).rank <= r);
+      CHECK(choose_layout(tile_px(w + 7, h)).rank <= r);
+      check_layout_sane(choose_layout(tile_px(w, h)), tile_px(w, h));
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1525,6 +1652,43 @@ TEST(zone_at_small_keys_grow_to_the_reach_but_never_into_the_pill) {
   CHECK(zone_at(g, 10, 44) == Zone::PLUS);
   CHECK(zone_at(g, 100, 45) == Zone::PILL);               // the pill zone cuts the key's reach
   CHECK(zone_at(g, 10, 45) == Zone::NONE);
+}
+
+TEST(compact_zones_tiny_and_column_open_the_list_everywhere_and_never_command) {
+  for (Family f : {Family::TINY, Family::COLUMN}) {
+    for (bool live : {true, false}) {
+      TapGeometry g = zones_for(151, 55, 62, 0, 55, true, false);   // stale full-look values must not leak through
+      g.centre_opens = true;
+      compact_zones(g, f, live);
+      for (int y = -1; y <= 55; ++y)
+        for (int x = -1; x <= 151; ++x) {
+          const Zone z = zone_at(g, x, y);
+          if (x < 0 || y < 0 || x >= 151 || y >= 55) CHECK(z == Zone::NONE);
+          else CHECK(z == Zone::BAR);   // the list, never PLUS, MINUS or PILL
+        }
+    }
+  }
+}
+
+TEST(compact_zones_row_keys_at_the_sides_list_between) {
+  TapGeometry g = zones_for(302, 55, 62, 0, 55, true, true);
+  g.bar_top = 20;
+  compact_zones(g, Family::ROW, true);
+  CHECK(zone_at(g, 0, 0) == Zone::PLUS);
+  CHECK(zone_at(g, 65, 54) == Zone::PLUS);                // half the gap (4) beside the key: 62 + 4 = 66
+  CHECK(zone_at(g, 66, 0) == Zone::BAR);
+  CHECK(zone_at(g, 150, 30) == Zone::BAR);
+  CHECK(zone_at(g, 235, 54) == Zone::BAR);
+  CHECK(zone_at(g, 236, 0) == Zone::MINUS);
+  CHECK(zone_at(g, 301, 54) == Zone::MINUS);
+  CHECK(zone_at(g, 302, 10) == Zone::NONE);
+  // Inert keys (the thermostat is not in heat or cool): their columns do nothing, the middle still lists.
+  compact_zones(g, Family::ROW, false);
+  CHECK(zone_at(g, 10, 10) == Zone::NONE && zone_at(g, 290, 10) == Zone::NONE);
+  CHECK(zone_at(g, 150, 10) == Zone::BAR);
+  // Every point has one answer, and no PILL.
+  for (int y = 0; y < 55; ++y)
+    for (int x = 0; x < 302; ++x) CHECK(zone_at(g, x, y) != Zone::PILL);
 }
 
 TEST(resume_gate_sends_once_until_ha_answers) {

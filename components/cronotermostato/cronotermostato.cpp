@@ -138,18 +138,36 @@ class RoomTile : public tessera::Tile {
     tick_h_ = bar_h_ + 2 * ui::px(2);
     tick_w_ = std::max(2, ui::px(2));
     tick_edge_ = std::max(1, ui::px(1));   // the tick's rim in the tile's ground, so it shows on the dark grey too
-    const bool has_name = c.name && *c.name;
+    dot_d_ = std::max(ui::px(8), body_h / 2);
+    dot_gap_ = ui::px(6);
+    // Plus at the LEFT, minus at the RIGHT (Alex's choice); the target and the temperature now stand between them.
+    key_w_ = std::min(std::max(ui::mm(11), w_ / 8), ui::mm(18));   // a tile too narrow for keys this wide has none
 
-    // What fits, richest first (choose_layout in the logic, tested): the large digits, the room's name, the "then" line.
+    // What fits, richest first (choose_layout in the logic, tested): by the tile's pixels, not by its cells. The 2x2 look
+    // (large digits, the room's name, the "then" line, the pill and the bar), or, when it does not fit, a row with the keys
+    // (wide, low), a column with the bar (narrow, tall) or the target alone (narrow, low).
+    const std::string sample = std::string("88") + decimal_ + "8\xC2\xB0";
     LayoutInput li;
+    li.width = w_;
     li.height = h_;
     li.digits_h = ui::line_height(Font::DIGITS);
     li.value_h = ui::line_height(Font::VALUE);
+    li.digits_w = ui::text_width(sample, Font::DIGITS);
+    li.value_w = ui::text_width(sample, Font::VALUE);
+    li.key_w = key_w_;
+    li.dot_w = dot_d_ + dot_gap_;
+    li.now_w = ui::text_width(tessera::fill(plugin_->text("now"), "n", sample.substr(0, 4) + "\xC2\xB0"), Font::BODY) + li.dot_w;
+    li.touch_h = ui::mm(7);
     li.body_h = body_h;
     li.tick_h = tick_h_;
     li.gap = gap;
     li.has_name = c.name && *c.name;
     const LayoutPlan plan = choose_layout(li);
+    family_ = plan.family;
+    has_keys_ = plan.keys;
+    has_bar_ = plan.bar;
+    has_pill_ = plan.pill;
+    now_line_ = plan.now_line;
     value_font_ = plan.digits ? Font::DIGITS : Font::VALUE;
     show_name_ = plan.name;
     show_then_ = plan.then;
@@ -160,9 +178,7 @@ class RoomTile : public tessera::Tile {
     const int top = plan.region_top;
     const int region_h = plan.region_h;
 
-    // Plus at the LEFT, minus at the RIGHT (Alex's choice); the target and the temperature now stand between them.
     key_h_ = std::min(std::min(std::max(ui::mm(12), region_h / 3), ui::mm(18)), region_h);   // larger on a large tile
-    key_w_ = std::min(std::min(std::max(ui::mm(11), w_ / 8), ui::mm(18)), w_ / 4);
     key_y_ = top + (region_h - key_h_) / 2;
     keys_bottom_ = key_y_ + key_h_;
     minus_ = ui::covers(MINUS, Font::BODY_LARGE) ? MINUS : "-";
@@ -173,8 +189,9 @@ class RoomTile : public tessera::Tile {
       lv_obj_set_pos(key_[i], i == 0 ? 0 : w_ - key_w_, key_y_);
       ui::set_text(key_label_[i], i == 0 ? "+" : minus_);
       lv_obj_center(key_label_[i]);
+      show(key_[i], has_keys_);
     }
-    mid_x_ = key_w_ + gap;
+    mid_x_ = has_keys_ ? key_w_ + gap : 0;
     mid_w_ = std::max(1, w_ - 2 * mid_x_);
     set_y_ = plan.mid_y;
     now_y_ = set_y_ + value_h;
@@ -193,7 +210,6 @@ class RoomTile : public tessera::Tile {
     now_ = ui::label(c.parent, Font::BODY, theme::MUTED);
     lv_obj_set_pos(now_, mid_x_, now_y_);
     dot_ = ui::block(c.parent, theme::TRACK);
-    dot_d_ = std::max(ui::px(8), body_h / 2);
     lv_obj_set_size(dot_, dot_d_, dot_d_);
     lv_obj_set_style_radius(dot_, LV_RADIUS_CIRCLE, 0);
     lv_obj_add_flag(dot_, LV_OBJ_FLAG_HIDDEN);
@@ -210,6 +226,7 @@ class RoomTile : public tessera::Tile {
     lv_obj_set_style_pad_all(pill_bg_, 0, 0);
     pill_ = ui::label(pill_bg_, Font::BODY, theme::MUTED);
     lv_obj_set_style_text_align(pill_, LV_TEXT_ALIGN_CENTER, 0);
+    show(pill_bg_, has_pill_);
 
     // The bar: a track with the bands inside it (the track clips them to its rounded ends), and the "now" tick over it.
     track_ = ui::block(c.parent, theme::TRACK);
@@ -218,6 +235,7 @@ class RoomTile : public tessera::Tile {
     lv_obj_set_style_pad_all(track_, 0, 0);
     lv_obj_set_style_radius(track_, ui::px(3), 0);
     lv_obj_set_style_clip_corner(track_, true, 0);
+    show(track_, has_bar_);
     for (int i = 0; i < MAX_SEGMENTS; ++i) {
       seg_[i] = ui::block(track_, theme::SUBTLE);
       lv_obj_set_style_radius(seg_[i], 0, 0);   // square joints: neighbours touch without a notch
@@ -285,7 +303,7 @@ class RoomTile : public tessera::Tile {
     // the window around the band of now (chosen when the data comes, and it comes at every change of band).
     nseg_ = 0;
     const uint32_t now = tessera::epoch();
-    if (bar_visible_ && !climate_down_) {
+    if (bar_visible_ && has_bar_ && !climate_down_) {
       JsonObjectConst r = data["entities"]["room"]["attributes"];
       const Day day = normalize_day(read_lists(r), now ? minute_of(now) : -1);
       for (const Segment &s : bar_segments(day.bands, w_)) {
@@ -341,6 +359,10 @@ class RoomTile : public tessera::Tile {
 
   // The zones that depend on the state: whether the keys act, whether the pill is a key, where the bar zone starts.
   void place_zones() {
+    if (family_ != Family::FULL) {
+      compact_zones(zones_, family_, can_set_);
+      return;
+    }
     zones_.keys_live = can_set_;
     zones_.bar_tappable = bar_visible_;
     zones_.pill_tappable = can_resume_;
@@ -437,6 +459,8 @@ class RoomTile : public tessera::Tile {
     // The target. Large digits when the font has every character of it, else the next face down.
     std::string target = "-";
     if (alive && setpoint_.shown() != NO_VALUE) target = format_temp(to_degrees(setpoint_.shown()), step_, decimal_, true);
+    // Without keys (a small tile) the tile has one number: the target, else the temperature now.
+    else if (alive && !has_keys_ && std::isfinite(current_)) target = format_temp(current_, step_, decimal_, true);
     const Font face = value_font_ == Font::DIGITS && !ui::covers(target, Font::DIGITS) ? Font::VALUE : value_font_;
     ui::set_font(set_, face);
     ui::set_text(set_, target);
@@ -447,21 +471,34 @@ class RoomTile : public tessera::Tile {
       const std::string t = format_temp(current_, step_, decimal_, true);
       if (t != "-") now = tessera::fill(plugin_->text("now"), "n", t);
     }
+    if (!now_line_) now.clear();
     ui::set_text(now_, now);
     ui::set_color(now_, theme::MUTED);
+    show(now_, now_line_);
     const int nw = now.empty() ? 0 : ui::text_width(now, Font::BODY);
     const bool dot = alive && hvac_ != 0;
-    const int dot_gap = dot ? ui::px(6) : 0;
-    const int total = nw + (dot ? dot_d_ + dot_gap : 0);
-    const int x0 = mid_x_ + std::max(0, (mid_w_ - total) / 2);
+    const int dot_gap = dot ? dot_gap_ : 0;
     const int body_h = ui::line_height(Font::BODY);
-    lv_obj_set_width(now_, std::max(1, nw + ui::px(2)));
-    lv_obj_set_pos(now_, x0 + (dot ? dot_d_ + dot_gap : 0), now_y_);
-    show(dot_, dot);
-    if (dot) {
-      lv_obj_set_pos(dot_, x0, now_y_ + (body_h - dot_d_) / 2);
-      ui::set_fill(dot_, hvac_ == 1 ? Tone::BUSY : Tone::ACCENT, theme::TRACK);
+    lv_obj_set_pos(set_, mid_x_, set_y_);
+    lv_obj_set_width(set_, mid_w_);
+    if (now_line_) {
+      // The dot stands before "Now 19.8°", the two centred together under the target.
+      const int total = nw + (dot ? dot_d_ + dot_gap : 0);
+      const int x0 = mid_x_ + std::max(0, (mid_w_ - total) / 2);
+      lv_obj_set_width(now_, std::max(1, nw + ui::px(2)));
+      lv_obj_set_pos(now_, x0 + (dot ? dot_d_ + dot_gap : 0), now_y_);
+      if (dot) lv_obj_set_pos(dot_, x0, now_y_ + (body_h - dot_d_) / 2);
+    } else if (dot) {
+      // No "now" line: the dot stands beside the target, the two centred together.
+      const int tw = std::min(ui::text_width(target, face), mid_w_);
+      const int group = tw + dot_gap + dot_d_;
+      const int x0 = mid_x_ + std::max(0, (mid_w_ - group) / 2);
+      lv_obj_set_width(set_, tw + ui::px(2));   // the label ends where the text does: the dot is not under it
+      lv_obj_set_pos(set_, x0, set_y_);
+      lv_obj_set_pos(dot_, x0 + tw + dot_gap, set_y_ + (ui::line_height(face) - dot_d_) / 2);
     }
+    show(dot_, dot);
+    if (dot) ui::set_fill(dot_, hvac_ == 1 ? Tone::BUSY : Tone::ACCENT, theme::TRACK);
     ui::set_color(name_, theme::MUTED);
     for (int i = 0; i < 2; ++i) {
       ui::set_fill(key_[i], Tone::NORMAL, theme::TRACK);
@@ -489,13 +526,22 @@ class RoomTile : public tessera::Tile {
   // What follows the clock: the tick on the bar, the pill and the "then" line.
   void paint_clock(uint32_t epoch, int minute) {
     // No tick without a band to stand on (empty lists), nor when the bar is off.
-    const bool bar = bar_visible_ && !climate_down_ && nseg_ > 0;
+    const bool bar = bar_visible_ && has_bar_ && !climate_down_ && nseg_ > 0;
     show(tick_, bar && epoch && minute >= 0);
     if (bar && epoch && minute >= 0) {
       const int x = now_marker(seg_data_, (size_t) nseg_, minute, w_);
       const int full = tick_w_ + 2 * tick_edge_;
       lv_obj_set_x(tick_, std::min(std::max(0, x - full / 2), w_ - full));
     }
+    if (has_pill_) paint_pill();
+    place_zones();
+    if (show_then_) {
+      ui::set_text(then_, then_text());
+      ui::set_color(then_, theme::MUTED);
+    }
+  }
+
+  void paint_pill() {
     const std::string pill = pill_text();
     ui::set_text(pill_, pill);
     // INK for a manual override or a problem (it asks to be seen), MUTED for the rest (and while "back to automatic" is on
@@ -509,11 +555,6 @@ class RoomTile : public tessera::Tile {
     ui::set_fill(pill_bg_, Tone::NORMAL, can_resume_ ? theme::TRACK : theme::CARD);
     lv_obj_set_width(pill_, std::min(cw, tw + ui::px(2)));
     lv_obj_center(pill_);
-    place_zones();
-    if (show_then_) {
-      ui::set_text(then_, then_text());
-      ui::set_color(then_, theme::MUTED);
-    }
   }
 
   Cronotermostato *plugin_;
@@ -525,7 +566,9 @@ class RoomTile : public tessera::Tile {
   Mode cmd_mode_ = Mode::HEAT;
   const char *cross_ = "x";
   int bar_y_ = 0, bar_h_ = 0, tick_h_ = 0, tick_w_ = 0, tick_edge_ = 1, pill_y_ = 0, then_y_ = 0, set_y_ = 0, now_y_ = 0;
-  int key_y_ = 0, key_h_ = 0, key_w_ = 0, keys_bottom_ = 0, mid_x_ = 0, mid_w_ = 0, dot_d_ = 0;
+  int key_y_ = 0, key_h_ = 0, key_w_ = 0, keys_bottom_ = 0, mid_x_ = 0, mid_w_ = 0, dot_d_ = 0, dot_gap_ = 0;
+  Family family_ = Family::FULL;
+  bool has_keys_ = true, has_bar_ = true, has_pill_ = true, now_line_ = true;
   Font value_font_ = Font::VALUE;
   bool show_name_ = false, show_then_ = false;
   char decimal_ = '.';

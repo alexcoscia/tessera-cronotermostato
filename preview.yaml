@@ -8,6 +8,32 @@ tiles:
   entity: climate.soggiorno
   options: {room: sensor.soggiorno_programma}
   sizes: [2x2, 3x2]
+# The small sizes (1x1, 2x1, 1x2): the bench tries each on every screen, and what is drawn depends on the pixels of the cell.
+- tile: room
+  name: Soggiorno
+  entity: climate.soggiorno
+  options: {room: sensor.soggiorno_programma}
+  sizes: [1x1, 2x1, 1x2]
+- tile: room
+  name: Fresco
+  entity: climate.fresco
+  options: {room: sensor.fresco_programma}
+  sizes: [1x1, 2x1, 1x2]
+- tile: room
+  name: Spento
+  entity: climate.spento
+  options: {room: sensor.spento_programma}
+  sizes: [1x1, 2x1, 1x2]
+- tile: room
+  name: Senza target
+  entity: climate.senza
+  options: {room: sensor.soggiorno_programma}
+  sizes: [1x1, 1x2]
+- tile: room
+  name: Offline
+  entity: climate.offline
+  options: {room: sensor.offline_programma}
+  sizes: [1x1, 2x1]
 - tile: room
   name: Camera
   entity: climate.camera

@@ -221,58 +221,111 @@ inline int hvac_dot(const std::string &hvac_action) {
 // ---------------------------------------------------------------------------------------------------------------
 // The layout of the tile: what fits in the height
 
-// Heights in pixels. `digits_h` / `value_h` are the line heights of Font::DIGITS and Font::VALUE.
+// Pixels, never cells: the same 1x1 is 151 x 55 on a 2.8-inch screen and 247 x 138 on a 10-inch one. `digits_h` / `value_h`
+// are the line heights of Font::DIGITS and Font::VALUE, `digits_w` / `value_w` the widths of the widest target ("88.8°")
+// in each face, `key_w` the width the keys will have (never narrowed to fit: a tile too narrow for keys of that width has
+// none), `dot_w` the dot and its gap, `now_w` the "now" line with its dot ("Now 88.8°"), `touch_h` the least height of a
+// key (7 mm).
 struct LayoutInput {
-  int height = 0, digits_h = 0, value_h = 0, body_h = 0, tick_h = 0, gap = 0;
+  int width = 0, height = 0, digits_h = 0, value_h = 0, digits_w = 0, value_w = 0, key_w = 0, dot_w = 0, now_w = 0, touch_h = 0;
+  int body_h = 0, tick_h = 0, gap = 0;
   bool has_name = false;
 };
 
-// The richest plan that fits, from the top: [name] [digits + "now" line] [then] pill bar. Richest first: large digits with
-// name and "then", digits with name, digits with "then", digits alone, then the same with the VALUE face. `rank` is
-// the index of the plan (0 richest, 7 poorest); it never goes down when the height does. A plan with a name needs
-// `has_name`. When even the poorest does not fit it is returned anyway, with every position clamped to 0 or more.
+// What the tile draws, by the room it has:
+//  FULL    the 2x2 look: [name] [digits + "now" line] [then] pill bar, with the + and - keys at the sides. Eight plans,
+//          richest first (large digits with name and "then", ..., the VALUE face alone); `rank` is the index (0 richest).
+//  ROW     wide but low (a 2x1 on a small screen): + at the left, the target between, - at the right, no bar and no pill.
+//          The "now" line only when it fits below the target. A tap between the keys opens the list of bands.
+//  COLUMN  narrow but tall (a 1x2): the target with the dot beside it and the bar under it, no keys, no pill. A tap anywhere
+//          opens the list of bands.
+//  TINY    narrow and low (a 1x1): the target (or the real temperature) with the dot beside it. A tap anywhere opens the list.
+// `rank` goes 0..7 for FULL, 8 ROW, 9 COLUMN, 10 TINY; at one width it never goes down when the height does.
+// A plan that does not fit is still returned (TINY, or the poorest that can be), with every position 0 or more.
+enum class Family { FULL, ROW, COLUMN, TINY };
+
 struct LayoutPlan {
-  int rank = 7;
+  Family family = Family::TINY;
+  int rank = 10;
   bool digits = false, name = false, then = false, fits = false;
+  bool keys = false, bar = false, pill = false, now_line = false;   // the parts that are drawn (the dot always is)
   int name_y = 0, then_y = 0, pill_y = 0, bar_y = 0;   // bar_y: top of the tick's room (tick_h high), at the bottom
   int region_top = 0, region_h = 1;                    // what the keys and the numbers share
-  int mid_y = 0;                                       // top of digits + "now" line, centred in the region
+  int mid_y = 0;                                       // top of the target (+ the "now" line when drawn), centred in the region
   int value_h = 0;                                     // height of the chosen face
 };
 
 inline LayoutPlan choose_layout(const LayoutInput &in) {
   const int gap = std::max(0, in.gap);
+  // Whether both keys, their gaps and a target of this width fit across the tile.
+  auto keys_fit = [&](int face_w) { return in.width >= 2 * (std::max(0, in.key_w) + gap) + face_w; };
   const bool digits_of[8] = {true, true, true, true, false, false, false, false};
   const bool name_of[8] = {true, true, false, false, true, true, false, false};
   const bool then_of[8] = {true, false, true, false, true, false, true, false};
   LayoutPlan out;
-  int pick = 7;
-  bool fits = false;
   for (int i = 0; i < 8; ++i) {
     if (name_of[i] && !in.has_name) continue;
+    if (!keys_fit(std::max(digits_of[i] ? in.digits_w : in.value_w, in.now_w))) continue;
     const int face = digits_of[i] ? in.digits_h : in.value_h;
     const int items = 3 + (name_of[i] ? 1 : 0) + (then_of[i] ? 1 : 0);   // value + now line, pill, bar
     const int total = face + in.body_h + in.body_h + in.tick_h + (name_of[i] ? in.body_h : 0) + (then_of[i] ? in.body_h : 0) +
                       (items - 1) * gap;
-    if (total <= in.height) {
-      pick = i;
-      fits = true;
-      break;
-    }
+    if (total > in.height) continue;
+    out.family = Family::FULL;
+    out.rank = i;
+    out.fits = true;
+    out.digits = digits_of[i];
+    out.name = name_of[i];
+    out.then = then_of[i];
+    out.keys = out.bar = out.pill = out.now_line = true;
+    out.value_h = face;
+    out.bar_y = std::max(0, in.height - in.tick_h);
+    out.pill_y = std::max(0, in.height - in.tick_h - gap - in.body_h);
+    out.then_y = std::max(0, out.pill_y - gap - in.body_h);
+    out.region_top = out.name ? in.body_h + gap : 0;
+    const int bottom = (out.then ? out.then_y : out.pill_y) - gap;
+    out.region_h = std::max(1, bottom - out.region_top);
+    out.mid_y = out.region_top + std::max(0, (out.region_h - (out.value_h + in.body_h)) / 2);
+    return out;
   }
-  out.rank = pick;
-  out.fits = fits;
-  out.digits = digits_of[pick];
-  out.name = name_of[pick] && in.has_name;
-  out.then = then_of[pick];
-  out.value_h = out.digits ? in.digits_h : in.value_h;
-  out.bar_y = std::max(0, in.height - in.tick_h);
-  out.pill_y = std::max(0, in.height - in.tick_h - gap - in.body_h);
-  out.then_y = std::max(0, out.pill_y - gap - in.body_h);
-  out.region_top = out.name ? in.body_h + gap : 0;
-  const int bottom = (out.then ? out.then_y : out.pill_y) - gap;
-  out.region_h = std::max(1, bottom - out.region_top);
-  out.mid_y = out.region_top + std::max(0, (out.region_h - (out.value_h + in.body_h)) / 2);
+  const int h = std::max(0, in.height);
+  // Keys need the width of the smaller face and a height they can be pressed at (and the face itself).
+  if (keys_fit(in.value_w) && h >= std::max(in.touch_h, in.value_h)) {
+    const bool big = keys_fit(in.digits_w) && h >= in.digits_h;
+    out.family = Family::ROW;
+    out.rank = 8;
+    out.fits = true;
+    out.keys = true;
+    out.digits = big;
+    out.value_h = big ? in.digits_h : in.value_h;
+    out.now_line = h >= out.value_h + gap + in.body_h && keys_fit(in.now_w);
+    out.region_h = std::max(1, h);
+    out.bar_y = h;
+    out.pill_y = out.then_y = h;
+    out.mid_y = std::max(0, (h - (out.value_h + (out.now_line ? in.body_h : 0))) / 2);
+    return out;
+  }
+  // No keys: the target with the dot beside it; the bar under it when the height holds both.
+  auto wide_for = [&](int face_w) { return in.width >= face_w + in.dot_w + 2 * gap; };
+  const bool tall = h >= in.value_h + gap + in.tick_h;
+  const bool big = in.digits_h <= h - (tall ? gap + in.tick_h : 0) && wide_for(in.digits_w);
+  out.digits = big;
+  out.value_h = big ? in.digits_h : in.value_h;
+  out.pill_y = out.then_y = h;
+  if (tall) {
+    out.family = Family::COLUMN;
+    out.rank = 9;
+    out.bar = true;
+    out.bar_y = std::max(0, h - in.tick_h);
+    out.region_h = std::max(1, out.bar_y - gap);
+  } else {
+    out.family = Family::TINY;
+    out.rank = 10;
+    out.bar_y = h;
+    out.region_h = std::max(1, h);
+  }
+  out.mid_y = std::max(0, (out.region_h - out.value_h) / 2);
+  out.fits = h >= out.value_h + (tall ? gap + in.tick_h : 0) && in.width >= 1;
   return out;
 }
 
@@ -618,6 +671,7 @@ struct TapGeometry {
   int pill_top = 0, pill_bottom = 0;   // the pill's hit area (used only when pill_tappable); pill_bottom is where the bar zone starts
   int bar_top = 0;                     // the bar zone: [bar_top, h)
   bool pill_tappable = false, bar_tappable = false, keys_live = false;
+  bool centre_opens = false;           // between the keys' columns a tap opens the list too (the ROW plan has no bar)
 };
 
 // Which zone a tap at (x, y) is in; a point outside the tile (or -1,-1, unknown) is NONE.
@@ -626,14 +680,34 @@ inline Zone zone_at(const TapGeometry &g, int x, int y) {
   const int lower = g.pill_tappable ? g.pill_top : g.bar_top;   // where the zones of the keys must stop
   if (y >= g.bar_top) return g.bar_tappable ? Zone::BAR : Zone::NONE;
   if (g.pill_tappable && y >= g.pill_top && y < g.pill_bottom) return x >= g.pill_x0 && x < g.pill_x1 ? Zone::PILL : Zone::NONE;
+  const int edge = g.key_w + g.gap / 2;   // the keys' hit area reaches half the gap towards the numbers
+  if (g.centre_opens && x >= edge && x < g.w - edge) return Zone::BAR;
   if (!g.keys_live) return Zone::NONE;
   const int grow = std::max(0, (g.key_reach - g.key_h) / 2);
   const int top = std::max(0, g.key_y - grow), bottom = std::min(lower, g.key_y + g.key_h + grow);
   if (y < top || y >= bottom) return Zone::NONE;
-  const int edge = g.key_w + g.gap / 2;   // the keys' hit area reaches half the gap towards the numbers
   if (x < edge) return Zone::PLUS;
   if (x >= g.w - edge) return Zone::MINUS;
   return Zone::NONE;
+}
+
+// The zones of the plans that are not FULL (no pill, no strip under the keys). TINY and COLUMN have no keys: the whole tile
+// is the zone that opens the list, and no tap there ever commands a temperature. ROW has keys (live only if `keys_live`),
+// and the part between them opens the list. FULL is set by lower_zones instead.
+inline void compact_zones(TapGeometry &g, Family family, bool keys_live) {
+  g.pill_tappable = false;
+  g.pill_top = g.pill_bottom = 0;
+  if (family == Family::ROW) {
+    g.keys_live = keys_live;
+    g.centre_opens = true;
+    g.bar_tappable = false;
+    g.bar_top = g.h;
+  } else {
+    g.keys_live = false;
+    g.centre_opens = false;
+    g.bar_tappable = true;
+    g.bar_top = 0;
+  }
 }
 
 // Whether the pill is a key: the override can be resumed (also while the pill says "Problem") and the climate id is known.
