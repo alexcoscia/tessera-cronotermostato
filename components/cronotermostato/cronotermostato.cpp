@@ -63,11 +63,12 @@ static TileInput read_input(JsonObjectConst data) {
   JsonObjectConst r = room["attributes"];
   in.status = r["status"] | "";
   in.manual = r["manual"] | false;
-  in.slot_end = (int64_t) number(r["slot_end_time"], 0);
-  in.override_until = (int64_t) number(r["override_until_time"], 0);
-  in.next_mode = (int) number(r["next_mode"], -1);
+  // Never cast a raw number: not finite or out of range would be undefined behaviour.
+  in.slot_end = (int64_t) clamp_to(number(r["slot_end_time"], 0), 0, MAX_EPOCH, 0);
+  in.override_until = (int64_t) clamp_to(number(r["override_until_time"], 0), 0, MAX_EPOCH, 0);
+  in.next_mode = (int) clamp_to(number(r["next_mode"], -1), -1, 99, -1);
   in.next_temp = number(r["next_temp"], NAN);
-  in.next_start = (int64_t) number(r["next_start_time"], 0);
+  in.next_start = (int64_t) clamp_to(number(r["next_start_time"], 0), 0, MAX_EPOCH, 0);
   return in;
 }
 
@@ -95,6 +96,15 @@ static const char *mode_word(const tessera::Plugin *plugin, Mode mode, bool shor
   }
 }
 
+// Show or hide a part, touching LVGL only when the state really changes.
+static void show(lv_obj_t *obj, bool on) {
+  if (!obj) return;
+  const bool hidden = lv_obj_has_flag(obj, LV_OBJ_FLAG_HIDDEN);
+  if (hidden != on) return;   // already as asked
+  if (on) lv_obj_remove_flag(obj, LV_OBJ_FLAG_HIDDEN);
+  else lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+}
+
 static int minute_of(uint32_t epoch) {
   if (!epoch) return -1;
   const tessera::LocalTime lt = tessera::local_time(epoch);
@@ -119,37 +129,28 @@ class RoomTile : public tessera::Tile {
     bar_h_ = std::max({ui::px(8), ui::mm(2.5f), h_ / 40});   // thicker on a large tile
     tick_h_ = bar_h_ + 2 * ui::px(2);
     tick_w_ = std::max(2, ui::px(2));
+    tick_edge_ = std::max(1, ui::px(1));   // the tick's rim in the tile's ground, so it shows on the dark grey too
     const bool has_name = c.name && *c.name;
 
-    // What fits, richest first: the largest digits, the room's name, the "then" line. The name goes before the "then"
-    // line, the large digits before both; when even the last does not fit it is drawn anyway (the bench says).
-    struct Plan { Font font; bool name, then; };
-    static const Plan plans[] = {{Font::DIGITS, true, true},  {Font::DIGITS, true, false}, {Font::DIGITS, false, true},
-                                 {Font::DIGITS, false, false}, {Font::VALUE, true, true},  {Font::VALUE, true, false},
-                                 {Font::VALUE, false, true},   {Font::VALUE, false, false}};
-    Plan chosen = plans[7];
-    for (const Plan &p : plans) {
-      if (p.name && !has_name) continue;
-      const int items = 3 + (p.name ? 1 : 0) + (p.then ? 1 : 0);   // value+now, pill, bar
-      const int total = ui::line_height(p.font) + body_h + body_h + tick_h_ + (p.name ? body_h : 0) + (p.then ? body_h : 0) +
-                        (items - 1) * gap;
-      if (total <= h_) {
-        chosen = p;
-        break;
-      }
-    }
-    value_font_ = chosen.font;
-    show_name_ = chosen.name;
-    show_then_ = chosen.then;
-    const int value_h = ui::line_height(value_font_);
-
-    // From the bottom: the bar (a tick taller than itself), the pill, the "then" line. From the top: the name.
-    bar_y_ = h_ - tick_h_ + (tick_h_ - bar_h_) / 2;
-    pill_y_ = h_ - tick_h_ - gap - body_h;
-    then_y_ = pill_y_ - gap - body_h;
-    const int top = show_name_ ? body_h + gap : 0;
-    const int bottom = (show_then_ ? then_y_ : pill_y_) - gap;
-    const int region_h = std::max(1, bottom - top);
+    // What fits, richest first (choose_layout in the logic, tested): the large digits, the room's name, the "then" line.
+    LayoutInput li;
+    li.height = h_;
+    li.digits_h = ui::line_height(Font::DIGITS);
+    li.value_h = ui::line_height(Font::VALUE);
+    li.body_h = body_h;
+    li.tick_h = tick_h_;
+    li.gap = gap;
+    li.has_name = c.name && *c.name;
+    const LayoutPlan plan = choose_layout(li);
+    value_font_ = plan.digits ? Font::DIGITS : Font::VALUE;
+    show_name_ = plan.name;
+    show_then_ = plan.then;
+    const int value_h = plan.value_h;
+    bar_y_ = plan.bar_y + (tick_h_ - bar_h_) / 2;
+    pill_y_ = plan.pill_y;
+    then_y_ = plan.then_y;
+    const int top = plan.region_top;
+    const int region_h = plan.region_h;
 
     // Plus at the LEFT, minus at the RIGHT (Alex's choice); the target and the temperature now stand between them.
     key_h_ = std::min(std::min(std::max(ui::mm(12), region_h / 3), ui::mm(18)), region_h);   // larger on a large tile
@@ -167,8 +168,7 @@ class RoomTile : public tessera::Tile {
     }
     mid_x_ = key_w_ + gap;
     mid_w_ = std::max(1, w_ - 2 * mid_x_);
-    const int block = value_h + body_h;
-    set_y_ = top + std::max(0, (region_h - block) / 2);
+    set_y_ = plan.mid_y;
     now_y_ = set_y_ + value_h;
 
     name_ = ui::label(c.parent, Font::BODY, theme::MUTED);
@@ -176,7 +176,7 @@ class RoomTile : public tessera::Tile {
     lv_obj_set_style_text_align(name_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_pos(name_, 0, 0);
     ui::set_text(name_, c.name ? c.name : "");
-    if (!show_name_) lv_obj_add_flag(name_, LV_OBJ_FLAG_HIDDEN);
+    show(name_, show_name_);
 
     set_ = ui::label(c.parent, value_font_, theme::INK);
     lv_obj_set_width(set_, mid_w_);
@@ -194,7 +194,7 @@ class RoomTile : public tessera::Tile {
     lv_obj_set_width(then_, w_);
     lv_obj_set_style_text_align(then_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_pos(then_, 0, then_y_);
-    if (!show_then_) lv_obj_add_flag(then_, LV_OBJ_FLAG_HIDDEN);
+    show(then_, show_then_);
     pill_ = ui::label(c.parent, Font::BODY, theme::MUTED);
     lv_obj_set_width(pill_, w_);
     lv_obj_set_style_text_align(pill_, LV_TEXT_ALIGN_CENTER, 0);
@@ -213,11 +213,15 @@ class RoomTile : public tessera::Tile {
       lv_obj_add_flag(seg_[i], LV_OBJ_FLAG_HIDDEN);
     }
     tick_ = ui::block(c.parent, theme::INK);
-    lv_obj_set_size(tick_, tick_w_, tick_h_);
+    lv_obj_set_size(tick_, tick_w_ + 2 * tick_edge_, tick_h_);
     lv_obj_set_pos(tick_, 0, bar_y_ - (tick_h_ - bar_h_) / 2);
+    lv_obj_set_style_border_width(tick_, tick_edge_, 0);
+    lv_obj_set_style_border_opa(tick_, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(tick_, ui::color(theme::CARD), 0);
     lv_obj_add_flag(tick_, LV_OBJ_FLAG_HIDDEN);
 
-    // The tap zone: the bar and the strip over it, at least 7 mm high, but never over the keys.
+    // The tap zone: the bar and the strip over it, up to 7 mm high but never over the keys, so it can be less (about 6 mm
+    // on the CYD). A screen that cannot tell where the finger was (tap_point() gives -1,-1) never opens the card.
     zone_y_ = std::max(h_ - std::max(tick_h_, ui::mm(7)), keys_bottom_);
   }
 
@@ -244,9 +248,7 @@ class RoomTile : public tessera::Tile {
     if (climate_down_) setpoint_.reset();
     else setpoint_.on_state(number(a["temperature"], NAN), 0);
     current_ = climate_down_ ? NAN : number(a["current_temperature"], NAN);
-    const char *action = a["hvac_action"] | "";
-    if (!*action) hvac_ = in.climate_state == "heat" ? 1 : in.climate_state == "cool" ? 2 : 0;
-    else hvac_ = std::strcmp(action, "heating") == 0 ? 1 : std::strcmp(action, "cooling") == 0 ? 2 : 0;
+    hvac_ = hvac_dot(a["hvac_action"] | "");   // no hvac_action, no dot
 
     // The bar: the day's bands to pixels, worked out here and not every second. A day with more than 16 bands keeps
     // the window around the band of now (chosen when the data comes, and it comes at every change of band).
@@ -352,12 +354,10 @@ class RoomTile : public tessera::Tile {
     const int body_h = ui::line_height(Font::BODY);
     lv_obj_set_width(now_, std::max(1, nw + ui::px(2)));
     lv_obj_set_pos(now_, x0 + (dot ? dot_d_ + dot_gap : 0), now_y_);
+    show(dot_, dot);
     if (dot) {
-      lv_obj_remove_flag(dot_, LV_OBJ_FLAG_HIDDEN);
       lv_obj_set_pos(dot_, x0, now_y_ + (body_h - dot_d_) / 2);
       ui::set_fill(dot_, hvac_ == 1 ? Tone::BUSY : Tone::ACCENT, theme::TRACK);
-    } else {
-      lv_obj_add_flag(dot_, LV_OBJ_FLAG_HIDDEN);
     }
     ui::set_color(name_, theme::MUTED);
     for (int i = 0; i < 2; ++i) {
@@ -369,29 +369,29 @@ class RoomTile : public tessera::Tile {
     const bool bar = bar_visible_ && alive;
     for (int i = 0; i < MAX_SEGMENTS; ++i) {
       if (!bar || i >= nseg_) {
-        lv_obj_add_flag(seg_[i], LV_OBJ_FLAG_HIDDEN);
+        show(seg_[i], false);
         continue;
       }
       const Segment &s = seg_data_[i];
-      lv_obj_remove_flag(seg_[i], LV_OBJ_FLAG_HIDDEN);
+      show(seg_[i], true);
       lv_obj_set_pos(seg_[i], s.x0, 0);
       lv_obj_set_size(seg_[i], std::max(1, s.x1 - s.x0), bar_h_);
       paint_mode(seg_[i], s.mode);
     }
     ui::set_fill(track_, Tone::NORMAL, theme::TRACK);
     ui::set_fill(tick_, Tone::NORMAL, theme::INK);
+    lv_obj_set_style_border_color(tick_, ui::color(theme::CARD), 0);
   }
 
   // What follows the clock: the tick on the bar, the pill and the "then" line.
   void paint_clock(uint32_t epoch, int minute) {
-    const bool bar = bar_visible_ && !climate_down_;
+    // No tick without a band to stand on (empty lists), nor when the bar is off.
+    const bool bar = bar_visible_ && !climate_down_ && nseg_ > 0;
+    show(tick_, bar && epoch && minute >= 0);
     if (bar && epoch && minute >= 0) {
-      const std::vector<Segment> segments(seg_data_, seg_data_ + nseg_);
-      const int x = now_marker(segments, minute, w_);
-      lv_obj_remove_flag(tick_, LV_OBJ_FLAG_HIDDEN);
-      lv_obj_set_x(tick_, std::min(std::max(0, x - tick_w_ / 2), w_ - tick_w_));
-    } else {
-      lv_obj_add_flag(tick_, LV_OBJ_FLAG_HIDDEN);
+      const int x = now_marker(seg_data_, (size_t) nseg_, minute, w_);
+      const int full = tick_w_ + 2 * tick_edge_;
+      lv_obj_set_x(tick_, std::min(std::max(0, x - full / 2), w_ - full));
     }
     ui::set_text(pill_, pill_text());
     // INK for a manual override or a problem (it asks to be seen), MUTED for the rest; never amber or blue as text.
@@ -405,7 +405,7 @@ class RoomTile : public tessera::Tile {
   const tessera::Plugin *plugin_;
   char entity_[96]{};
   int w_ = 0, h_ = 0, tile_ = -1;
-  int bar_y_ = 0, bar_h_ = 0, tick_h_ = 0, tick_w_ = 0, pill_y_ = 0, then_y_ = 0, set_y_ = 0, now_y_ = 0, zone_y_ = 0;
+  int bar_y_ = 0, bar_h_ = 0, tick_h_ = 0, tick_w_ = 0, tick_edge_ = 1, pill_y_ = 0, then_y_ = 0, set_y_ = 0, now_y_ = 0, zone_y_ = 0;
   int key_y_ = 0, key_h_ = 0, key_w_ = 0, keys_bottom_ = 0, mid_x_ = 0, mid_w_ = 0, dot_d_ = 0;
   Font value_font_ = Font::VALUE;
   bool show_name_ = false, show_then_ = false;
@@ -463,7 +463,12 @@ class DayCard : public tessera::Card {
     hdr_ = ui::label(c.parent, Font::BODY, theme::MUTED);
     lv_obj_set_width(hdr_, w_ - 2 * pad);
     lv_obj_set_pos(hdr_, pad, (line_ - body_h) / 2);
-    if (!header_) lv_obj_add_flag(hdr_, LV_OBJ_FLAG_HIDDEN);
+    show(hdr_, header_);
+    more_ = ui::label(c.parent, Font::BODY, theme::MUTED);
+    lv_obj_set_width(more_, w_ - 2 * pad);
+    lv_obj_set_style_text_align(more_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_pos(more_, pad, 0);
+    show(more_, false);
     note_ = ui::label(c.parent, Font::BODY, theme::MUTED);
     lv_obj_set_width(note_, w_ - 2 * pad);
     lv_obj_set_pos(note_, pad, top_ + (line_ - body_h) / 2);
@@ -557,20 +562,29 @@ class DayCard : public tessera::Card {
     int cur = 0;
     for (int i = 0; i < n_; ++i)
       if (rows_data_[i].current) cur = i;
-    const int first = n_ > rows_ ? std::min(std::max(cur - rows_ / 2, 0), n_ - rows_) : 0;
+    // More bands than rows: the last row's place says how many are left out ("+3 more").
+    const int vis = n_ > rows_ && rows_ > 1 ? rows_ - 1 : rows_;
+    const int first = n_ > vis ? std::min(std::max(cur - vis / 2, 0), n_ - vis) : 0;
+    const bool more = n_ > vis;
+    show(more_, more);
+    if (more) {
+      lv_obj_set_y(more_, top_ + vis * line_ + (line_ - ui::line_height(Font::BODY)) / 2);
+      ui::set_text(more_, tessera::fill(plugin_->text("more"), "n", std::to_string(n_ - vis)));
+      ui::set_color(more_, theme::MUTED);
+    }
     for (int i = 0; i < rows_; ++i) {
       Line &r = row_[i];
       const int idx = first + i;
-      const bool shown = idx < n_;
-      for (lv_obj_t *part : {r.hl, r.chip, r.time, r.mode, r.temp, r.now}) {
-        if (!part) continue;
-        if (shown) lv_obj_remove_flag(part, LV_OBJ_FLAG_HIDDEN);
-        else lv_obj_add_flag(part, LV_OBJ_FLAG_HIDDEN);
+      const bool shown = i < vis && idx < n_;
+      for (lv_obj_t *part : {r.chip, r.time, r.mode, r.temp}) show(part, shown);
+      if (!shown) {
+        show(r.hl, false);
+        show(r.now, false);
+        continue;
       }
-      if (!shown) continue;
       const Row &d = rows_data_[idx];
-      if (!d.current) lv_obj_add_flag(r.hl, LV_OBJ_FLAG_HIDDEN);
-      if (r.now && !d.current) lv_obj_add_flag(r.now, LV_OBJ_FLAG_HIDDEN);
+      show(r.hl, d.current);
+      show(r.now, d.current);
       paint_mode(r.chip, d.mode);
       ui::set_text(r.time, format_clock(d.start) + dash_ + format_clock(d.end));
       ui::set_text(r.mode, mode_word(plugin_, d.mode, short_));
@@ -596,7 +610,7 @@ class DayCard : public tessera::Card {
   tessera::Text program_;
   Row rows_data_[MAX_SEGMENTS];
   Line row_[MAX_SEGMENTS];
-  lv_obj_t *hdr_{}, *note_{};
+  lv_obj_t *hdr_{}, *note_{}, *more_{};
 };
 
 void Cronotermostato::setup() {

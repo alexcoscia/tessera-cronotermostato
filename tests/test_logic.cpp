@@ -1178,6 +1178,104 @@ TEST(card_rows_max_16_keeps_current_in_view) {
   CHECK(card_rows(l, 0)[0].start == 0);
 }
 
+// ---------------------------------------------------------------- 5. step 4b: numbers, dot, layout
+
+TEST(clamp_to_hostile_values) {
+  CHECK(clamp_to(NaN, 0, MAX_EPOCH, 7) == 7);
+  CHECK(clamp_to(INF, 0, MAX_EPOCH, 7) == 7);
+  CHECK(clamp_to(-INF, 0, MAX_EPOCH, 7) == 7);
+  CHECK(clamp_to(1e30, 0, MAX_EPOCH, 7) == MAX_EPOCH);
+  CHECK(clamp_to(-5, 0, MAX_EPOCH, 7) == 0);
+  CHECK(clamp_to(1792389600, 0, MAX_EPOCH, 7) == 1792389600);
+  CHECK((int64_t) clamp_to(1e30, 0, MAX_EPOCH, 0) == 4000000000LL);
+  CHECK((int) clamp_to(1e9, -1, 99, -1) == 99);
+}
+
+TEST(hvac_dot_needs_the_action) {
+  CHECK(hvac_dot("heating") == 1);
+  CHECK(hvac_dot("cooling") == 2);
+  CHECK(hvac_dot("idle") == 0);
+  CHECK(hvac_dot("off") == 0);
+  CHECK(hvac_dot("") == 0);       // no hvac_action: no dot, whatever the state
+  CHECK(hvac_dot("Heating") == 0);
+}
+
+TEST(now_marker_pointer_matches_vector) {
+  const auto segs = bar_segments(bands_of({0, 360, 1020}, {360, 1020, 1440}, {1, 0, 1}, {17, 0, 21}, {0, 1, 0}), 302);
+  for (int m : {0, 1, 359, 360, 700, 1019, 1020, 1439, 2000, -4})
+    CHECK(now_marker(segs, m, 302) == now_marker(segs.data(), segs.size(), m, 302));
+  CHECK(now_marker(nullptr, 0, 720, 302) == now_x(720, 302));
+}
+
+static LayoutInput li(int h, bool name = true) {
+  LayoutInput in;
+  in.height = h;
+  in.digits_h = 48;
+  in.value_h = 40;
+  in.body_h = 17;
+  in.tick_h = 14;
+  in.gap = 4;
+  in.has_name = name;
+  return in;
+}
+
+static void check_layout_sane(const LayoutPlan &p, const LayoutInput &in) {
+  CHECK(p.name_y >= 0 && p.then_y >= 0 && p.pill_y >= 0 && p.bar_y >= 0 && p.region_top >= 0 && p.mid_y >= 0);
+  CHECK(p.region_h >= 1);
+  if (!p.fits) return;
+  // Nothing overlaps from the top: name, then the digits and the "now" line, then "then", the pill and the bar.
+  CHECK(p.mid_y >= p.region_top);
+  CHECK(p.mid_y + p.value_h + in.body_h <= (p.then ? p.then_y : p.pill_y));
+  if (p.then) CHECK(p.then_y + in.body_h <= p.pill_y);
+  CHECK(p.pill_y + in.body_h <= p.bar_y);
+  CHECK(p.bar_y + in.tick_h == in.height);
+  if (p.name) CHECK(in.body_h <= p.region_top);
+}
+
+TEST(choose_layout_monotone_in_height) {
+  for (bool name : {true, false}) {
+    int last = 99;
+    for (int h = 0; h <= 400; ++h) {
+      const LayoutInput in = li(h, name);
+      const LayoutPlan p = choose_layout(in);
+      CHECK(p.rank <= last);   // taller never gives a poorer plan
+      last = p.rank;
+      check_layout_sane(p, in);
+    }
+    CHECK(choose_layout(li(400, name)).rank == (name ? 0 : 2));
+  }
+}
+
+TEST(choose_layout_picks_the_richest_that_fits) {
+  // digits 48 + now 17 + pill 17 + bar 14 + 2 gaps of 4 = 104: the plan with the large digits and nothing else.
+  LayoutPlan p = choose_layout(li(104));
+  CHECK(p.fits && p.digits && !p.name && !p.then && p.rank == 3);
+  p = choose_layout(li(104 + 17 + 4));   // room for the name
+  CHECK(p.fits && p.digits && p.name && !p.then && p.rank == 1);
+  p = choose_layout(li(104 + 2 * (17 + 4)));
+  CHECK(p.fits && p.digits && p.name && p.then && p.rank == 0);
+  p = choose_layout(li(103));   // the large digits do not fit: the smaller face
+  CHECK(p.fits && !p.digits && p.value_h == 40 && p.rank == 7);
+  p = choose_layout(li(104 + 17 + 4, false));   // no name: the "then" line takes the room
+  CHECK(p.fits && p.digits && !p.name && p.then && p.rank == 2);
+}
+
+TEST(choose_layout_degrades_without_negative_positions) {
+  for (int h : {-20, 0, 1, 10, 50, 80}) {
+    for (bool name : {true, false}) {
+      const LayoutInput in = li(h, name);
+      const LayoutPlan p = choose_layout(in);
+      CHECK(!p.fits && p.rank == 7 && !p.digits && !p.name && !p.then);
+      check_layout_sane(p, in);
+    }
+  }
+  LayoutInput in = li(0);
+  in.gap = -3;
+  in.body_h = 0;
+  in.tick_h = 0;
+  check_layout_sane(choose_layout(in), in);
+}
+
 int main() {
   for (auto &t : tests()) {
     g_test = t.name;

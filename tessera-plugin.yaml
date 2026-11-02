@@ -26,10 +26,10 @@ tiles:
   - id: room
     name: tile_name
     icon: thermometer
-    # 2x2 is the least that holds the keys, the temperatures and the bar. Not larger than 4x4: past that the
-    # room's bar and keys only grow, with nothing more to show.
-    sizes: { min: 2x2, max: 4x4 }
-    # About 20 blocks (16 bands, the track, the "now" tick, 2 keys) and 6 labels, plus the bands the tile keeps.
+    # 2x2 is the least that holds the keys, the temperatures and the bar. Not larger than 3x2: past that the
+    # screen is mostly empty space (seen on the 10-inch at 4x4), with nothing more to show.
+    sizes: { min: 2x2, max: 3x2 }
+    # 21 blocks (16 bands, the track, the "now" tick, the dot, 2 keys) and 7 labels (name, target, now, then, pill, 2 on the keys), plus the bands the tile keeps.
     memory: 3000
     domains: [climate]
     # What the tile reads of the climate: the target and the temperature now, the keys' limits and step, the action.

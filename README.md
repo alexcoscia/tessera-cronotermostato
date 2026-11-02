@@ -6,12 +6,13 @@ keys, and a bar with today's bands of its weekly program. A tap on the bar opens
 > Needs the cronotermostato integration 0.2.0 or later in Home Assistant, and the Tessera app must allow the plugin's
 > Home Assistant actions (`cronotermostato.set_manual` and `cronotermostato.resume_auto`) for this display.
 > This is an early version: the tile only **shows** things for now. The **+** and **-** keys and the Auto / Manual
-> keys do not work yet (they come in the next version); a tap on the bar already opens the list of today's bands.
+> keys do not work yet (they come in the next version). A tap on the bar should open the list of today's bands, but that
+> still has to be tried on a real screen (the bench cannot tap the bar).
 
 ## Set up
 
 1. In the Tessera app, open Plugins and enable **Cronotermostato** for the screen. The screen builds once.
-2. In Layout, place the **Room program** tile on a page. It needs at least 2 columns by 2 rows.
+2. In Layout, place the **Room program** tile on a page. It needs at least 2 columns by 2 rows, and is not offered larger than 3 columns by 2 rows.
 3. In the inspector, choose the room's climate entity (for example `climate.living_room`).
 4. Choose the room program sensor, `sensor.<room>_program` (in an Italian Home Assistant `sensor.<room>_programma`).
    The list shows every sensor: pick the one of the same room that ends in `_program`.
@@ -25,9 +26,15 @@ keys, and a bar with today's bands of its weekly program. A tap on the bar opens
 - Under the numbers, a line that says the state of the program: "Auto" and the program's name, "Manual until 18:00",
   "Paused", "No program", "Problem" or "Unavailable". A line "Then Heating 21.5 at 17:00" shows when the tile has the room.
 - A bar with today's bands, from 00:00 to 24:00: amber for heating, blue for cooling, grey for off, and a dark tick for
-  now. A tap on the bar (not on the rest of the tile) opens the list of today's bands, the one of now marked.
+  now. A tap on the bar (not on the rest of the tile) is meant to open the list of today's bands, the one of now marked
+  (to be tried on a real screen). The tap zone is the bar and the strip over it, never over the keys: about 6 mm high on the
+  CYD. A screen that cannot say where the finger touched never opens the card.
 
 ## Good to know
+
+- The times in the list of bands are always 24-hour ("17:00"), also on a screen set to AM/PM; the pill and the "then" line
+  follow the screen's own clock format. A known limit.
+- With more bands than the list has rows, its last row says how many are left out ("+3 more"), and the rows shown are the ones around now.
 
 - Needs the cronotermostato integration 0.2.0 or later; older versions do not give the tile today's bands.
 - The tile does not fit a screen that has only one column in its layout (a vertical CYD or the Waveshare 4.3-inch).

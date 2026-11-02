@@ -7,7 +7,7 @@ tiles:
   name: Soggiorno
   entity: climate.soggiorno
   options: {room: sensor.soggiorno_programma}
-  sizes: [2x2, 3x2, 4x4]
+  sizes: [2x2, 3x2]
 - tile: room
   name: Camera
   entity: climate.camera
@@ -77,7 +77,7 @@ tiles:
   name: Soggiorno grande
   entity: climate.grande
   options: {room: sensor.grande_programma}
-  sizes: [2x2, 4x4]
+  sizes: [2x2]
 states:
   climate.soggiorno:
     state: heat

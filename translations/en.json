@@ -23,11 +23,12 @@
     "heat_s": "Heat",
     "cool_s": "Cool",
     "decimal": ".",
-    "no_bands": "No bands today"
+    "no_bands": "No bands today",
+    "more": "+{n} more"
   },
   "app": {
     "name": "Cronotermostato",
-    "summary": "Weekly heating programs of the cronotermostato integration: set the room and see today's bands on a bar.",
+    "summary": "Weekly heating programs for your rooms: set the temperature and see today's bands on a bar.",
     "tile_name": "Room program",
     "tile_example": "21.5, until 18:00",
     "card_name": "Today's bands",

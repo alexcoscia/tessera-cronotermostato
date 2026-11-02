@@ -186,12 +186,94 @@ inline int now_x(int minute, int width) {
 
 // The pixel for the "now" marker when the bar is drawn: like now_x, but moved inside the drawn band of that minute
 // (the floor of the minute can lie one pixel left of the rounded start of its band).
-inline int now_marker(const std::vector<Segment> &segments, int minute, int width) {
+inline int now_marker(const Segment *segments, size_t count, int minute, int width) {
   int x = now_x(minute, width);
   const int m = std::min(std::max(minute, 0), MINUTES_PER_DAY - 1);
-  for (const Segment &s : segments)
+  for (size_t i = 0; i < count; ++i) {
+    const Segment &s = segments[i];
     if (s.start <= m && m < s.end) return std::min(std::max(x, s.x0), s.x1 - 1);
+  }
   return x;
+}
+inline int now_marker(const std::vector<Segment> &segments, int minute, int width) {
+  return now_marker(segments.data(), segments.size(), minute, width);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Hostile numbers, the dot of the thermostat
+
+// A number from Home Assistant forced into [lo, hi]: not finite gives `fallback`. Cast the result, never the raw value
+// (a cast of NaN or of 1e30 to an integer is undefined behaviour).
+inline double clamp_to(double v, double lo, double hi, double fallback) {
+  if (!std::isfinite(v)) return fallback;
+  return std::min(std::max(v, lo), hi);
+}
+constexpr double MAX_EPOCH = 4e9;   // seconds since 1970 (fits uint32_t)
+
+// The dot beside "now": 1 amber while the thermostat heats, 2 blue while it cools, 0 for anything else, including no
+// `hvac_action` at all (the state alone says what it may do, not what it does).
+inline int hvac_dot(const std::string &hvac_action) {
+  if (hvac_action == "heating") return 1;
+  if (hvac_action == "cooling") return 2;
+  return 0;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The layout of the tile: what fits in the height
+
+// Heights in pixels. `digits_h` / `value_h` are the line heights of Font::DIGITS and Font::VALUE.
+struct LayoutInput {
+  int height = 0, digits_h = 0, value_h = 0, body_h = 0, tick_h = 0, gap = 0;
+  bool has_name = false;
+};
+
+// The richest plan that fits, from the top: [name] [digits + "now" line] [then] pill bar. Richest first: large digits with
+// name and "then", digits with name, digits with "then", digits alone, then the same with the VALUE face. `rank` is
+// the index of the plan (0 richest, 7 poorest); it never goes down when the height does. A plan with a name needs
+// `has_name`. When even the poorest does not fit it is returned anyway, with every position clamped to 0 or more.
+struct LayoutPlan {
+  int rank = 7;
+  bool digits = false, name = false, then = false, fits = false;
+  int name_y = 0, then_y = 0, pill_y = 0, bar_y = 0;   // bar_y: top of the tick's room (tick_h high), at the bottom
+  int region_top = 0, region_h = 1;                    // what the keys and the numbers share
+  int mid_y = 0;                                       // top of digits + "now" line, centred in the region
+  int value_h = 0;                                     // height of the chosen face
+};
+
+inline LayoutPlan choose_layout(const LayoutInput &in) {
+  const int gap = std::max(0, in.gap);
+  const bool digits_of[8] = {true, true, true, true, false, false, false, false};
+  const bool name_of[8] = {true, true, false, false, true, true, false, false};
+  const bool then_of[8] = {true, false, true, false, true, false, true, false};
+  LayoutPlan out;
+  int pick = 7;
+  bool fits = false;
+  for (int i = 0; i < 8; ++i) {
+    if (name_of[i] && !in.has_name) continue;
+    const int face = digits_of[i] ? in.digits_h : in.value_h;
+    const int items = 3 + (name_of[i] ? 1 : 0) + (then_of[i] ? 1 : 0);   // value + now line, pill, bar
+    const int total = face + in.body_h + in.body_h + in.tick_h + (name_of[i] ? in.body_h : 0) + (then_of[i] ? in.body_h : 0) +
+                      (items - 1) * gap;
+    if (total <= in.height) {
+      pick = i;
+      fits = true;
+      break;
+    }
+  }
+  out.rank = pick;
+  out.fits = fits;
+  out.digits = digits_of[pick];
+  out.name = name_of[pick] && in.has_name;
+  out.then = then_of[pick];
+  out.value_h = out.digits ? in.digits_h : in.value_h;
+  out.bar_y = std::max(0, in.height - in.tick_h);
+  out.pill_y = std::max(0, in.height - in.tick_h - gap - in.body_h);
+  out.then_y = std::max(0, out.pill_y - gap - in.body_h);
+  out.region_top = out.name ? in.body_h + gap : 0;
+  const int bottom = (out.then ? out.then_y : out.pill_y) - gap;
+  out.region_h = std::max(1, bottom - out.region_top);
+  out.mid_y = out.region_top + std::max(0, (out.region_h - (out.value_h + in.body_h)) / 2);
+  return out;
 }
 
 // ---------------------------------------------------------------------------------------------------------------

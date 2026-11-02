@@ -3,7 +3,7 @@
     "name": "Italiano"
   },
   "screen": {
-    "now": "Ora {n}",
+    "now": "Adesso {n}",
     "right_now": "Adesso",
     "auto": "Auto",
     "auto_named": "Auto · {name}",
@@ -23,11 +23,12 @@
     "heat_s": "Caldo",
     "cool_s": "Freddo",
     "decimal": ",",
-    "no_bands": "Nessuna fascia oggi"
+    "no_bands": "Nessuna fascia oggi",
+    "more": "+{n} altre"
   },
   "app": {
     "name": "Cronotermostato",
-    "summary": "Programmi settimanali di riscaldamento dell'integrazione cronotermostato: imposta la stanza e vedi le fasce di oggi su una barra.",
+    "summary": "Programmi settimanali di riscaldamento per le stanze: imposta la temperatura e vedi le fasce di oggi.",
     "tile_name": "Programma stanza",
     "tile_example": "21,5, fino alle 18:00",
     "card_name": "Fasce di oggi",
