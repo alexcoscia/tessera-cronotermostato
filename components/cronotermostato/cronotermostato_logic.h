@@ -451,6 +451,13 @@ class Setpoint {
     return false;
   }
 
+  // Drop what is waiting or on its way and show the real value again (a command that cannot be sent, a room that became
+  // read-only). Nothing is sent after this.
+  void cancel() {
+    settle();
+    shown_ = reported_;
+  }
+
   // The entity is gone/unavailable: forget everything but the range.
   void reset() {
     settle();
@@ -501,6 +508,7 @@ struct TileInput {
   bool manual = false;
   int64_t slot_end = 0;        // slot_end_time
   int64_t override_until = 0;  // override_until_time
+  int slot_mode = -1;          // slot_mode code of the band now (0 off, 1 heat, 2 cool), -1 when absent
   int next_mode = -1;          // next_mode code, -1 when absent
   double next_temp = NAN;      // next_temp, NaN when absent
   int64_t next_start = 0;      // next_start_time
@@ -517,7 +525,9 @@ struct TileView {
   bool next_has_temp = false;
   double next_temp = 0;
   int64_t next_start = 0;
-  bool controls = false;       // + and - work
+  bool controls = false;       // the room may be commanded (not unassigned, paused, down)
+  bool can_set = false;        // + and - work: controls, and the mode to send is known
+  Mode command_mode = Mode::OFF;   // the mode set_manual is sent with (only valid when can_set)
   bool can_resume = false;     // the "MANUAL x" / Auto key can resume the program
   bool bar_visible = false;    // the day bar is worth drawing
 };
@@ -531,6 +541,25 @@ inline std::string cut_name(const std::string &s) {
 }
 inline bool is_down(const std::string &s) { return s.empty() || s == "unavailable" || s == "unknown"; }
 }  // namespace detail
+
+// The mode a + or - sends with set_manual (the service requires one): the mode the thermostat is in now when it heats or
+// cools, else the mode of the band of now; -1 when neither heats nor cools (the keys stay inert: a guess could switch a
+// room on).
+inline int command_mode_code(const std::string &climate_state, int slot_mode) {
+  if (climate_state == "heat") return 1;
+  if (climate_state == "cool") return 2;
+  if (slot_mode == 1 || slot_mode == 2) return slot_mode;
+  return -1;
+}
+
+// What the service takes as `mode`: the integration's own codes, not words for a person.
+inline const char *mode_name(Mode mode) {
+  switch (mode) {
+    case Mode::HEAT: return "heat";
+    case Mode::COOL: return "cool";
+    default: return "off";
+  }
+}
 
 // Order: climate down, no room chosen, room down (unavailable, missing), paused, no program (unassigned, not_running),
 // problem (unsupported_*, out_of_range, error, unknown status), manual, no program (empty state), auto.
@@ -559,6 +588,9 @@ inline TileView tile_view(const TileInput &in) {
   if (v.pill == Pill::NO_PROGRAM) return v;
   if (!no_program) v.program = detail::cut_name(in.room_state);
   v.controls = true;
+  const int code = command_mode_code(in.climate_state, in.slot_mode);
+  v.can_set = code >= 0;
+  v.command_mode = code >= 0 ? mode_from_code(code) : Mode::OFF;
   v.bar_visible = true;
   v.can_resume = in.manual;   // also in PROBLEM: an override can be dropped whatever the status
   v.until = v.pill == Pill::MANUAL ? in.override_until : in.slot_end;
@@ -573,6 +605,87 @@ inline TileView tile_view(const TileInput &in) {
   }
   return v;
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// Where a finger lands: the tap zones, and the single "back to automatic" command
+
+enum class Zone { NONE, PLUS, MINUS, PILL, BAR };
+
+// The tile's pixels (0,0 the top left). The zones never overlap: from the bottom up, the bar zone, then (only while the
+// pill is a key) the pill zone, then the two keys' columns; everything else is NONE.
+struct TapGeometry {
+  int w = 0, h = 0;
+  int key_w = 0, key_y = 0, key_h = 0, gap = 0, key_reach = 0;   // the drawn keys; key_reach: the least height of a key's hit area
+  int pill_top = 0, pill_bottom = 0;   // the pill's hit area (used only when pill_tappable); pill_bottom is where the bar zone starts
+  int bar_top = 0;                     // the bar zone: [bar_top, h)
+  bool pill_tappable = false, bar_tappable = false, keys_live = false;
+};
+
+// Which zone a tap at (x, y) is in; a point outside the tile (or -1,-1, unknown) is NONE.
+inline Zone zone_at(const TapGeometry &g, int x, int y) {
+  if (x < 0 || y < 0 || x >= g.w || y >= g.h) return Zone::NONE;
+  const int lower = g.pill_tappable ? g.pill_top : g.bar_top;   // where the zones of the keys must stop
+  if (y >= g.bar_top) return g.bar_tappable ? Zone::BAR : Zone::NONE;
+  if (g.pill_tappable && y >= g.pill_top && y < g.pill_bottom) return Zone::PILL;
+  if (!g.keys_live) return Zone::NONE;
+  const int grow = std::max(0, (g.key_reach - g.key_h) / 2);
+  const int top = std::max(0, g.key_y - grow), bottom = std::min(lower, g.key_y + g.key_h + grow);
+  if (y < top || y >= bottom) return Zone::NONE;
+  const int edge = g.key_w + g.gap / 2;   // the keys' hit area reaches half the gap towards the numbers
+  if (x < edge) return Zone::PLUS;
+  if (x >= g.w - edge) return Zone::MINUS;
+  return Zone::NONE;
+}
+
+// The pill zone and the bar zone under the keys. `pill_y` / `body_h`: the pill's text; `above`: the lowest y the pill zone
+// may reach upwards (the bottom of the "now" line); `tick_h`: the bar with its tick, which the bar zone always keeps;
+// `want`: the height wanted for a tap area (7 mm). While the pill is not a key the bar zone alone takes the strip under
+// the keys, up to `want` high (the pill row is then part of it, as before).
+inline void lower_zones(int h, int keys_bottom, int pill_y, int body_h, int above, int tick_h, int want, bool pill_tappable,
+                        int &pill_top, int &pill_bottom, int &bar_top) {
+  want = std::max(want, 1);
+  tick_h = std::max(tick_h, 1);
+  if (!pill_tappable) {
+    bar_top = std::min(std::max(h - std::max(tick_h, want), keys_bottom), std::max(0, h - tick_h));
+    pill_top = pill_bottom = bar_top;
+    return;
+  }
+  const int centre = pill_y + body_h / 2;
+  pill_bottom = std::min(centre + want / 2, std::max(0, h - tick_h));
+  pill_top = std::max(pill_bottom - want, std::max(above, 0));
+  if (pill_top > pill_bottom) pill_top = pill_bottom;
+  bar_top = pill_bottom;
+}
+
+// "Back to automatic" is one command per press of the pill: it is sent once, and not again until Home Assistant says
+// the override is gone or CONFIRM_MS have passed. All times are milliseconds given by the caller.
+class ResumeGate {
+ public:
+  // True when the command should be sent now.
+  bool press(uint32_t now) {
+    if (waiting_ && !expired(now, since_, CONFIRM_MS)) return false;
+    waiting_ = true;
+    since_ = now;
+    return true;
+  }
+  // From each state: the override is no more (or it was never there).
+  void on_state(bool manual) {
+    if (!manual) waiting_ = false;
+  }
+  bool waiting(uint32_t now) const { return waiting_ && !expired(now, since_, CONFIRM_MS); }
+  // True the one time the wait ends without an answer (the tile paints the pill again).
+  bool tick(uint32_t now) {
+    if (waiting_ && expired(now, since_, CONFIRM_MS)) {
+      waiting_ = false;
+      return true;
+    }
+    return false;
+  }
+
+ private:
+  bool waiting_ = false;
+  uint32_t since_ = 0;
+};
 
 // ---------------------------------------------------------------------------------------------------------------
 // The card: one row per band

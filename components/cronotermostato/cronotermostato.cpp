@@ -1,9 +1,11 @@
 // Cronotermostato: the room tile (the target, the temperature now, today's bands on a bar) and the card with the list of
-// today's bands. This is the drawing only (plan 3, step 4): the keys + / - and Auto / Manual act in step 5.
+// today's bands. The keys + and - force the setpoint (cronotermostato.set_manual), the pill "Manual x" goes back to the
+// program (cronotermostato.resume_auto), the bar opens the card (plan 3, steps 4 and 5).
 // The maths (bands to pixels, texts, which pill) is in cronotermostato_logic.h, tested on a computer; here it becomes
 // widgets. What was tried before is in docs/SPIKE.md.
 #include "cronotermostato.h"
 #include "cronotermostato_logic.h"
+#include "esphome/core/hal.h"
 #include "esphome/core/log.h"
 #include <algorithm>
 #include <cmath>
@@ -23,6 +25,8 @@ constexpr int MAX_SEGMENTS = (int) MAX_BANDS;   // the most bands the bar draws 
 // The signs the fonts may lack, each with what stands in for it.
 constexpr const char *MINUS = "\xE2\x88\x92";    // U+2212, the true minus
 constexpr const char *EN_DASH = "\xE2\x80\x93";  // U+2013
+constexpr const char *CROSS = "\xE2\x9C\x95";     // U+2715, the cross on the pill that goes back to automatic
+constexpr const char *TIMES = "\xC3\x97";           // U+00D7, what stands in for it
 
 // ---------------------------------------------------------------------------------------------------------------
 // Reading the data (the tile and the card get the same message)
@@ -66,6 +70,7 @@ static TileInput read_input(JsonObjectConst data) {
   // Never cast a raw number: not finite or out of range would be undefined behaviour.
   in.slot_end = (int64_t) clamp_to(number(r["slot_end_time"], 0), 0, MAX_EPOCH, 0);
   in.override_until = (int64_t) clamp_to(number(r["override_until_time"], 0), 0, MAX_EPOCH, 0);
+  in.slot_mode = (int) clamp_to(number(r["slot_mode"], -1), -1, 99, -1);
   in.next_mode = (int) clamp_to(number(r["next_mode"], -1), -1, 99, -1);
   in.next_temp = number(r["next_temp"], NAN);
   in.next_start = (int64_t) clamp_to(number(r["next_start_time"], 0), 0, MAX_EPOCH, 0);
@@ -116,10 +121,12 @@ static int minute_of(uint32_t epoch) {
 
 class RoomTile : public tessera::Tile {
  public:
-  explicit RoomTile(const tessera::Plugin *plugin) : plugin_(plugin) {}
+  explicit RoomTile(Cronotermostato *plugin) : plugin_(plugin) {}
+  ~RoomTile() override { plugin_->detach(this); }
 
   void create(const tessera::TileContext &c) override {
-    std::snprintf(entity_, sizeof entity_, "%s", c.entity);
+    // The climate of the tile: what the two actions name. Empty (a firmware that does not give it): the keys stay inert.
+    std::snprintf(entity_, sizeof entity_, "%s", c.entity ? c.entity : "");
     tile_ = c.tile;
     w_ = c.width;
     h_ = c.height;
@@ -195,10 +202,13 @@ class RoomTile : public tessera::Tile {
     lv_obj_set_style_text_align(then_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_pos(then_, 0, then_y_);
     show(then_, show_then_);
-    pill_ = ui::label(c.parent, Font::BODY, theme::MUTED);
-    lv_obj_set_width(pill_, w_);
+    // The pill sits on a chip, as wide as its text. The chip is the colour of the keys while the pill is a key (manual), and
+    // the colour of the tile's ground otherwise, so it is not seen.
+    pill_bg_ = ui::block(c.parent, theme::CARD);
+    lv_obj_set_style_radius(pill_bg_, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_pad_all(pill_bg_, 0, 0);
+    pill_ = ui::label(pill_bg_, Font::BODY, theme::MUTED);
     lv_obj_set_style_text_align(pill_, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_pos(pill_, 0, pill_y_);
 
     // The bar: a track with the bands inside it (the track clips them to its rounded ends), and the "now" tick over it.
     track_ = ui::block(c.parent, theme::TRACK);
@@ -220,9 +230,21 @@ class RoomTile : public tessera::Tile {
     lv_obj_set_style_border_color(tick_, ui::color(theme::CARD), 0);
     lv_obj_add_flag(tick_, LV_OBJ_FLAG_HIDDEN);
 
-    // The tap zone: the bar and the strip over it, up to 7 mm high but never over the keys, so it can be less (about 6 mm
-    // on the CYD). A screen that cannot tell where the finger was (tap_point() gives -1,-1) never opens the card.
-    zone_y_ = std::max(h_ - std::max(tick_h_, ui::mm(7)), keys_bottom_);
+    // The tap zones (zone_at in the logic, tested): the keys' columns, the pill while it is a key, the bar and the strip
+    // over it; the rest of the tile is nothing. A screen that cannot tell where the finger was (tap_point() gives -1,-1)
+    // does nothing.
+    zones_.w = w_;
+    zones_.h = h_;
+    zones_.key_w = key_w_;
+    zones_.key_y = key_y_;
+    zones_.key_h = key_h_;
+    zones_.gap = gap;
+    zones_.key_reach = ui::mm(7);
+    now_bottom_ = now_y_ + body_h;
+    body_h_ = body_h;
+    place_zones();
+    cross_ = ui::covers(CROSS, Font::BODY) ? CROSS : ui::covers(TIMES, Font::BODY) ? TIMES : "x";
+    attached_ = plugin_->attach(this);
   }
 
   void on_state(JsonObjectConst data) override {
@@ -232,6 +254,10 @@ class RoomTile : public tessera::Tile {
     climate_down_ = detail::is_down(in.climate_state);
     kind_ = view.pill;
     controls_ = view.controls;
+    can_set_ = view.can_set && entity_[0] != 0;
+    cmd_mode_ = view.command_mode;
+    can_resume_ = view.pill == Pill::MANUAL && view.can_resume && entity_[0] != 0;
+    resume_.on_state(in.manual);
     bar_visible_ = view.bar_visible;
     program_ = roomy::text(view.program);
     show_until_ = view.show_until && view.until > 0;
@@ -245,8 +271,12 @@ class RoomTile : public tessera::Tile {
     // The setpoint: the logic keeps the value shown (the keys of step 5 move it); here it follows the climate.
     step_ = number(a["target_temp_step"], 0.5);
     setpoint_.set_range(make_range(number(a["min_temp"], 7), number(a["max_temp"], 35), step_));
-    if (climate_down_) setpoint_.reset();
-    else setpoint_.on_state(number(a["temperature"], NAN), 0);
+    if (climate_down_) {
+      setpoint_.reset();
+    } else {
+      if (!can_set_) setpoint_.cancel();   // the room can no longer be commanded: nothing waits, nothing goes out
+      setpoint_.on_state(number(a["temperature"], NAN), 0);
+    }
     current_ = climate_down_ ? NAN : number(a["current_temperature"], NAN);
     hvac_ = hvac_dot(a["hvac_action"] | "");   // no hvac_action, no dot
 
@@ -264,11 +294,13 @@ class RoomTile : public tessera::Tile {
       // day.truncated_before / truncated_after are not drawn: a day with more than 16 bands is far from real, the part
       // left out stays the empty track (nothing hides it), and the window always holds the band of now.
     }
+    place_zones();
     paint();
     minute_ = -2;   // the tick and the pill are set again on the next on_tick
   }
 
   void on_tick(uint32_t epoch) override {
+    tick(millis());   // the plugin's 250 ms interval does this too; this is the net for a tile it could not attach
     const int minute = minute_of(epoch);
     if (minute == minute_) return;
     minute_ = minute;
@@ -280,17 +312,81 @@ class RoomTile : public tessera::Tile {
     paint_clock(tessera::epoch(), minute_of(tessera::epoch()));
   }
 
-  // Only a tap on the bar (and the strip over it) opens the list of today's bands. A tap anywhere else does nothing
-  // here; the keys act in step 5.
+  // What a tap does depends on where the finger was: + (left) and - (right) move the target, the pill goes back to the
+  // program while it says "Manual x", the bar (and the strip over it) opens the list of today's bands, anything else
+  // does nothing.
   void on_tap() override {
-    if (!bar_visible_) return;
     const tessera::Point at = tessera::tap_point();
-    if (at.x < 0 || at.y < zone_y_ || at.x >= w_) return;
-    tessera::open_card(plugin_->plugin_id(), "day", entity_, tile_);
+    switch (zone_at(zones_, at.x, at.y)) {
+      case Zone::PLUS: return bump(+1);
+      case Zone::MINUS: return bump(-1);
+      case Zone::PILL: return resume();
+      case Zone::BAR: return (void) tessera::open_card(plugin_->plugin_id(), "day", entity_, tile_);
+      default: return;
+    }
+  }
+
+  // The waits of this tile, called every 250 ms by the plugin: the send 600 ms after the last tap, the return to the real
+  // value 5 s after the send, the end of the wait for "back to automatic".
+  void tick(uint32_t now) {
+    int value = 0;
+    if (setpoint_.take(now, value)) send(value);
+    if (setpoint_.tick(now)) paint();
+    if (resume_.tick(now)) paint_clock(tessera::epoch(), minute_of(tessera::epoch()));
   }
 
  private:
   bool fits(const std::string &text) const { return ui::text_width(text, Font::BODY) <= w_; }
+
+  // The zones that depend on the state: whether the keys act, whether the pill is a key, where the bar zone starts.
+  void place_zones() {
+    zones_.keys_live = can_set_;
+    zones_.bar_tappable = bar_visible_;
+    zones_.pill_tappable = can_resume_;
+    lower_zones(h_, keys_bottom_, pill_y_, body_h_, now_bottom_, tick_h_, ui::mm(7), zones_.pill_tappable, zones_.pill_top,
+                zones_.pill_bottom, zones_.bar_top);
+  }
+
+  // + or -: the shown value moves one step at once; the command follows 600 ms after the last tap (at once when the plugin
+  // has no room to wait for this tile).
+  void bump(int direction) {
+    if (!can_set_ || resume_.waiting(millis())) return;
+    const uint32_t now = millis();
+    if (!setpoint_.on_tap(direction, now)) return;   // no target, or already at the limit: nothing to send
+    paint();
+    int value = 0;
+    if (!attached_ && setpoint_.take(now + DEBOUNCE_MS, value)) send(value);
+  }
+
+  // set_manual: the service has no entity_id, the climate goes in the fields; `mode` is required, so it is the mode the
+  // thermostat is in (or the band's), never a changed one. A command that cannot go (the room cannot be commanded now,
+  // the firmware refuses it) shows the real value again.
+  void send(int centi) {
+    if (!can_set_ || entity_[0] == 0 || centi == NO_VALUE) {
+      setpoint_.cancel();
+      paint();
+      return;
+    }
+    JsonDocument fields;
+    fields["climate_entity_id"] = entity_;
+    fields["mode"] = mode_name(cmd_mode_);
+    fields["temperature"] = to_degrees(centi);   // degrees, as a number
+    if (!tessera::action("cronotermostato.set_manual", "", fields)) {
+      setpoint_.cancel();
+      paint();
+    }
+  }
+
+  // "Manual x": back to the program, once; a value waiting to be sent is dropped.
+  void resume() {
+    if (!can_resume_ || !resume_.press(millis())) return;
+    setpoint_.cancel();
+    JsonDocument fields;
+    fields["climate_entity_id"] = entity_;
+    if (!tessera::action("cronotermostato.resume_auto", "", fields)) resume_.on_state(false);
+    paint();
+    paint_clock(tessera::epoch(), minute_of(tessera::epoch()));
+  }
 
   // The pill: the program ("Auto" and its name), a manual override and when it ends, or why there is none.
   std::string pill_text() const {
@@ -301,10 +397,16 @@ class RoomTile : public tessera::Tile {
       case Pill::NO_PROGRAM: return plugin_->text("no_program");
       case Pill::PROBLEM: return plugin_->text("problem");
       case Pill::MANUAL: {
-        if (!show_until_) return plugin_->text("manual");
-        const std::string time = tessera::clock_text(until_);
-        const std::string full = tessera::fill(plugin_->text("manual_until"), "time", time);
-        return fits(full) ? full : tessera::fill(plugin_->text("until"), "time", time);
+        // "Manual until 18:00 x", else "Until 18:00 x", else "Manual x": the cross says the pill is a key.
+        const std::string cross = can_resume_ ? std::string(" ") + cross_ : std::string();
+        if (show_until_) {
+          const std::string time = tessera::clock_text(until_);
+          for (const char *key : {"manual_until", "until"}) {
+            const std::string text = tessera::fill(plugin_->text(key), "time", time) + cross;
+            if (fits(text)) return text;
+          }
+        }
+        return std::string(plugin_->text("manual")) + cross;
       }
       default: {
         if (program_.empty()) return plugin_->text("auto");
@@ -362,7 +464,7 @@ class RoomTile : public tessera::Tile {
     ui::set_color(name_, theme::MUTED);
     for (int i = 0; i < 2; ++i) {
       ui::set_fill(key_[i], Tone::NORMAL, theme::TRACK);
-      ui::set_color(key_label_[i], controls_ ? theme::INK : theme::MUTED);
+      ui::set_color(key_label_[i], can_set_ ? theme::INK : theme::MUTED);
     }
 
     // The bar: a band is a block inside the track; with no bar to show the track stays empty (switched off).
@@ -393,19 +495,34 @@ class RoomTile : public tessera::Tile {
       const int full = tick_w_ + 2 * tick_edge_;
       lv_obj_set_x(tick_, std::min(std::max(0, x - full / 2), w_ - full));
     }
-    ui::set_text(pill_, pill_text());
-    // INK for a manual override or a problem (it asks to be seen), MUTED for the rest; never amber or blue as text.
-    ui::set_color(pill_, kind_ == Pill::MANUAL || kind_ == Pill::PROBLEM ? theme::INK : theme::MUTED);
+    const std::string pill = pill_text();
+    ui::set_text(pill_, pill);
+    // INK for a manual override or a problem (it asks to be seen), MUTED for the rest (and while "back to automatic" is on
+    // its way); never amber or blue as text.
+    const bool waiting = resume_.waiting(millis());
+    ui::set_color(pill_, (kind_ == Pill::MANUAL && !waiting) || kind_ == Pill::PROBLEM ? theme::INK : theme::MUTED);
+    const int tw = ui::text_width(pill, Font::BODY);
+    const int cw = std::min(w_, tw + 2 * ui::px(10));
+    lv_obj_set_size(pill_bg_, cw, body_h_ + 2 * ui::px(2));
+    lv_obj_set_pos(pill_bg_, (w_ - cw) / 2, pill_y_ - ui::px(2));
+    ui::set_fill(pill_bg_, Tone::NORMAL, can_resume_ ? theme::TRACK : theme::CARD);
+    lv_obj_set_width(pill_, std::min(cw, tw + ui::px(2)));
+    lv_obj_center(pill_);
     if (show_then_) {
       ui::set_text(then_, then_text());
       ui::set_color(then_, theme::MUTED);
     }
   }
 
-  const tessera::Plugin *plugin_;
+  Cronotermostato *plugin_;
   char entity_[96]{};
-  int w_ = 0, h_ = 0, tile_ = -1;
-  int bar_y_ = 0, bar_h_ = 0, tick_h_ = 0, tick_w_ = 0, tick_edge_ = 1, pill_y_ = 0, then_y_ = 0, set_y_ = 0, now_y_ = 0, zone_y_ = 0;
+  int w_ = 0, h_ = 0, tile_ = -1, now_bottom_ = 0, body_h_ = 0;
+  TapGeometry zones_;
+  ResumeGate resume_;
+  bool can_set_ = false, can_resume_ = false, attached_ = false;
+  Mode cmd_mode_ = Mode::HEAT;
+  const char *cross_ = "x";
+  int bar_y_ = 0, bar_h_ = 0, tick_h_ = 0, tick_w_ = 0, tick_edge_ = 1, pill_y_ = 0, then_y_ = 0, set_y_ = 0, now_y_ = 0;
   int key_y_ = 0, key_h_ = 0, key_w_ = 0, keys_bottom_ = 0, mid_x_ = 0, mid_w_ = 0, dot_d_ = 0;
   Font value_font_ = Font::VALUE;
   bool show_name_ = false, show_then_ = false;
@@ -424,7 +541,7 @@ class RoomTile : public tessera::Tile {
   Segment seg_data_[MAX_SEGMENTS];
   int nseg_ = 0;
   int minute_ = -2;
-  lv_obj_t *name_{}, *pill_{}, *set_{}, *now_{}, *dot_{}, *then_{}, *track_{}, *tick_{};
+  lv_obj_t *name_{}, *pill_{}, *pill_bg_{}, *set_{}, *now_{}, *dot_{}, *then_{}, *track_{}, *tick_{};
   lv_obj_t *key_[2]{}, *key_label_[2]{}, *seg_[MAX_SEGMENTS]{};
 };
 
@@ -612,6 +729,26 @@ class DayCard : public tessera::Card {
   Line row_[MAX_SEGMENTS];
   lv_obj_t *hdr_{}, *note_{}, *more_{};
 };
+
+void Cronotermostato::on_interval(uint32_t now_ms) {
+  for (RoomTile *tile : tiles_)
+    if (tile) tile->tick(now_ms);
+}
+
+bool Cronotermostato::attach(RoomTile *tile) {
+  for (RoomTile *&slot : tiles_) {
+    if (!slot) {
+      slot = tile;
+      return true;
+    }
+  }
+  return false;
+}
+
+void Cronotermostato::detach(RoomTile *tile) {
+  for (RoomTile *&slot : tiles_)
+    if (slot == tile) slot = nullptr;
+}
 
 void Cronotermostato::setup() {
   add_tile("room", [this]() { return new RoomTile(this); });

@@ -1276,6 +1276,240 @@ TEST(choose_layout_degrades_without_negative_positions) {
   check_layout_sane(choose_layout(in), in);
 }
 
+// ---------------------------------------------------------------------------------------------------------------
+// Step 5: the command mode, the tap zones, the single resume, cancel
+
+TEST(command_mode_follows_the_thermostat_then_the_band) {
+  CHECK(command_mode_code("heat", -1) == 1);
+  CHECK(command_mode_code("cool", 1) == 2);          // the thermostat's own mode wins over the band's
+  CHECK(command_mode_code("heat_cool", 2) == 2);     // a mode the service does not take: the band says
+  CHECK(command_mode_code("auto", 1) == 1);
+  CHECK(command_mode_code("off", 1) == 1);           // switched off, the band heats: forcing heat is what + asks
+  CHECK(command_mode_code("off", 0) == -1);          // nothing heats or cools: no guess
+  CHECK(command_mode_code("off", -1) == -1);
+  CHECK(command_mode_code("heat_cool", 7) == -1);
+  CHECK_STR(mode_name(Mode::HEAT), "heat");
+  CHECK_STR(mode_name(Mode::COOL), "cool");
+  CHECK_STR(mode_name(Mode::OFF), "off");
+}
+
+TEST(tile_view_can_set_needs_controls_and_a_mode) {
+  TileInput in = base_input();
+  TileView v = tile_view(in);
+  CHECK(v.controls && v.can_set && v.command_mode == Mode::HEAT);
+  in.climate_state = "cool";
+  v = tile_view(in);
+  CHECK(v.can_set && v.command_mode == Mode::COOL);
+  in.climate_state = "off";
+  v = tile_view(in);
+  CHECK(v.controls && !v.can_set);                    // off and no band that heats: keys inert
+  in.slot_mode = 2;
+  v = tile_view(in);
+  CHECK(v.can_set && v.command_mode == Mode::COOL);
+  // no command where the room cannot be commanded
+  for (const char *status : {"unassigned", "not_running", "paused", "unavailable", "missing"}) {
+    TileInput x = base_input();
+    x.status = status;
+    x.slot_mode = 1;
+    TileView w = tile_view(x);
+    CHECK(!w.controls && !w.can_set);
+  }
+  TileInput none = base_input();
+  none.has_room = false;
+  none.slot_mode = 1;
+  CHECK(!tile_view(none).can_set);
+  TileInput down = base_input();
+  down.climate_state = "unavailable";
+  CHECK(!tile_view(down).can_set);
+  // a manual override can be resumed, and + and - still work during it
+  TileInput man = base_input();
+  man.manual = true;
+  TileView m = tile_view(man);
+  CHECK(m.pill == Pill::MANUAL && m.can_resume && m.can_set);
+  TileInput aut = base_input();
+  CHECK(!tile_view(aut).can_resume);
+}
+
+TEST(setpoint_cancel_drops_the_wait_and_shows_the_real_value) {
+  Setpoint sp = make_sp();
+  sp.on_state(21.0, 0);
+  sp.on_tap(+1, 1000);
+  CHECK(sp.pending() && sp.shown() == 2150);
+  sp.cancel();
+  CHECK(!sp.pending() && sp.shown() == 2100);
+  int v = 0;
+  CHECK(!sp.due(5000) && !sp.take(5000, v));            // nothing goes out after a cancel
+  // also after the send: nothing is waited for, and no revert later
+  sp.on_tap(+1, 6000);
+  CHECK(sp.take(6600, v) && v == 2150);
+  sp.cancel();
+  CHECK(sp.shown() == 2100 && !sp.pending());
+  CHECK(!sp.tick(20000));
+  sp.on_state(21.5, 21000);                             // a late report is just the real value
+  CHECK(sp.shown() == 2150);
+}
+
+TEST(setpoint_full_sequence_one_send_for_three_taps_and_a_return) {
+  Setpoint sp = make_sp();
+  sp.on_state(20.0, 0);
+  int sends = 0, last = 0, v = 0;
+  const uint32_t taps[] = {1000, 1200, 1400};
+  for (uint32_t at : taps) CHECK(sp.on_tap(+1, at));
+  for (uint32_t now = 1400; now <= 4000; now += 250) {    // the 250 ms interval, from the last tap on
+    if (sp.take(now, v)) { ++sends; last = v; }
+    sp.tick(now);
+    if (now < 2000) CHECK(sends == 0);                    // 600 ms after the LAST tap (1400): not before 2000
+  }
+  CHECK(sends == 1 && last == 2150);
+  CHECK(sp.shown() == 2150);                              // still shown: the 5 s have not passed
+  for (uint32_t now = 4000; now <= 9000; now += 250) sp.tick(now);
+  CHECK(sp.shown() == 2000 && !sp.pending());             // no answer: back to the real value
+}
+
+TEST(setpoint_on_limits_does_not_send_twice) {
+  Setpoint sp = make_sp();
+  sp.on_state(35.0, 0);
+  CHECK(!sp.on_tap(+1, 100));                             // already at the top: nothing changes, nothing is due
+  CHECK(!sp.due(2000));
+  int v = 0;
+  CHECK(!sp.take(2000, v));
+}
+
+static TapGeometry zones_for(int w, int h, int key_w, int key_y, int key_h, bool pill, bool bar) {
+  TapGeometry g;
+  g.w = w;
+  g.h = h;
+  g.key_w = key_w;
+  g.key_y = key_y;
+  g.key_h = key_h;
+  g.gap = 8;
+  g.key_reach = 40;
+  g.pill_tappable = pill;
+  g.bar_tappable = bar;
+  g.keys_live = true;
+  return g;
+}
+
+TEST(lower_zones_cyd_like_small_tile) {
+  // the CYD 2x2: 302x110, keys end at 82, pill text at 71 (17 high), bar 18 high at the bottom
+  int pt = 0, pb = 0, bt = 0;
+  lower_zones(110, 82, 71, 17, 68, 18, 40, false, pt, pb, bt);
+  CHECK(bt == 82 && pt == pb && pb == bt);                // no pill key: the bar zone takes the strip under the keys
+  lower_zones(110, 82, 71, 17, 68, 18, 40, true, pt, pb, bt);
+  CHECK(pb == 92 && bt == pb);                            // 110 - 18: the bar keeps its own strip
+  CHECK(pt >= 68 && pt < pb);
+  CHECK(pb - pt <= 40);
+  CHECK(110 - bt >= 18);
+}
+
+TEST(lower_zones_large_tile_gives_the_pill_the_full_height) {
+  int pt = 0, pb = 0, bt = 0;
+  lower_zones(277, 150, 215, 24, 140, 20, 66, true, pt, pb, bt);
+  CHECK(pb - pt == 66);                                   // 7 mm at 149 dpi is about 41 px; 66 stands for "wanted"
+  CHECK(pt >= 140 && pb <= 277 - 20 && bt == pb);
+  lower_zones(277, 150, 215, 24, 140, 20, 66, false, pt, pb, bt);
+  CHECK(bt == 277 - 66);
+}
+
+TEST(lower_zones_degenerate_inputs_stay_inside_the_tile) {
+  for (int h : {0, 1, 5, 20, 110}) {
+    for (bool pill : {false, true}) {
+      int pt = -1, pb = -1, bt = -1;
+      lower_zones(h, 0, 0, 0, 0, 0, 0, pill, pt, pb, bt);
+      CHECK(pt >= 0 && pt <= pb && pb <= std::max(h, 1) && bt >= 0 && bt <= std::max(h, 1));
+      lower_zones(h, 500, 900, 30, 800, 500, 400, pill, pt, pb, bt);
+      CHECK(pt >= 0 && pt <= pb && bt >= 0 && bt <= std::max(h, 1) + 0);
+    }
+  }
+}
+
+TEST(zone_at_partitions_the_tile) {
+  TapGeometry g = zones_for(300, 110, 60, 10, 64, true, true);
+  g.pill_top = 60;
+  g.pill_bottom = 90;
+  g.bar_top = 90;
+  CHECK(zone_at(g, 10, 30) == Zone::PLUS);
+  CHECK(zone_at(g, 289, 30) == Zone::MINUS);
+  CHECK(zone_at(g, 150, 30) == Zone::NONE);               // the numbers: nothing
+  CHECK(zone_at(g, 63, 30) == Zone::PLUS);                // half the gap beside the key
+  CHECK(zone_at(g, 64, 30) == Zone::NONE);
+  CHECK(zone_at(g, 235, 30) == Zone::NONE);
+  CHECK(zone_at(g, 236, 30) == Zone::MINUS);
+  CHECK(zone_at(g, 150, 60) == Zone::PILL);
+  CHECK(zone_at(g, 10, 75) == Zone::PILL);                // the pill row spans the width, under the keys too
+  CHECK(zone_at(g, 150, 89) == Zone::PILL);
+  CHECK(zone_at(g, 150, 90) == Zone::BAR);
+  CHECK(zone_at(g, 10, 109) == Zone::BAR);
+  CHECK(zone_at(g, 150, 59) == Zone::NONE);
+  // outside the tile and unknown points
+  CHECK(zone_at(g, -1, -1) == Zone::NONE);
+  CHECK(zone_at(g, 300, 30) == Zone::NONE);
+  CHECK(zone_at(g, 100, 110) == Zone::NONE);
+  CHECK(zone_at(g, -1, 30) == Zone::NONE);
+}
+
+TEST(zone_at_every_point_has_exactly_one_answer_and_pill_is_off_unless_manual) {
+  TapGeometry g = zones_for(300, 110, 60, 10, 64, false, true);
+  g.bar_top = 82;
+  g.pill_top = g.pill_bottom = 82;
+  g.keys_live = true;
+  for (int y = 0; y < 110; ++y)
+    for (int x = 0; x < 300; ++x) {
+      const Zone z = zone_at(g, x, y);
+      CHECK(z != Zone::PILL);                              // not a key while the room is in automatic
+      if (y >= 82) CHECK(z == Zone::BAR);
+      else CHECK(z == Zone::NONE || z == Zone::PLUS || z == Zone::MINUS);
+    }
+}
+
+TEST(zone_at_inert_keys_and_no_bar) {
+  TapGeometry g = zones_for(300, 110, 60, 10, 64, true, false);
+  g.pill_top = 60;
+  g.pill_bottom = 90;
+  g.bar_top = 90;
+  g.keys_live = false;
+  CHECK(zone_at(g, 10, 30) == Zone::NONE);                // inert keys: a tap on them is nothing, never the bar's card
+  CHECK(zone_at(g, 289, 30) == Zone::NONE);
+  CHECK(zone_at(g, 150, 100) == Zone::NONE);              // no bar to open
+  CHECK(zone_at(g, 150, 70) == Zone::PILL);
+}
+
+TEST(zone_at_small_keys_grow_to_the_reach_but_never_into_the_pill) {
+  TapGeometry g = zones_for(300, 110, 60, 20, 20, true, true);   // keys 20 high, reach 40: 10 more above and below
+  g.pill_top = 45;
+  g.pill_bottom = 90;
+  g.bar_top = 90;
+  CHECK(zone_at(g, 10, 10) == Zone::PLUS);
+  CHECK(zone_at(g, 10, 9) == Zone::NONE);
+  CHECK(zone_at(g, 10, 44) == Zone::PLUS);
+  CHECK(zone_at(g, 10, 45) == Zone::PILL);                // the pill zone cuts the key's reach
+}
+
+TEST(resume_gate_sends_once_until_ha_answers) {
+  ResumeGate gate;
+  CHECK(gate.press(1000));
+  CHECK(gate.waiting(1001));
+  CHECK(!gate.press(1100));                               // a second press while waiting: nothing
+  CHECK(!gate.press(5999));
+  gate.on_state(true);                                    // HA still says manual: the wait goes on
+  CHECK(!gate.press(3000));
+  gate.on_state(false);                                   // the override is gone
+  CHECK(!gate.waiting(3001));
+  CHECK(gate.press(3002));                                // a new override can be resumed again
+  CHECK(!gate.tick(7000));
+  CHECK(gate.tick(8002));                                 // 5 s without an answer: the tile repaints once
+  CHECK(!gate.tick(8003));
+  CHECK(gate.press(8004));                                // and the key works again
+}
+
+TEST(resume_gate_handles_the_millisecond_wrap) {
+  ResumeGate gate;
+  const uint32_t near_wrap = 0xFFFFFF00u;
+  CHECK(gate.press(near_wrap));
+  CHECK(!gate.press(near_wrap + 1000u));                  // wraps past zero inside the 5 s
+  CHECK(gate.press(near_wrap + 5000u));
+}
+
 int main() {
   for (auto &t : tests()) {
     g_test = t.name;

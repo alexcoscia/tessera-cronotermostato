@@ -19,9 +19,9 @@ tiles:
   options: {room: sensor.fresco_programma}
   sizes: [2x2, 3x2]
 - tile: room
-  name: Studio
-  entity: climate.studio
-  options: {room: sensor.studio_programma}
+  name: Bagno
+  entity: climate.bagno
+  options: {room: sensor.bagno_programma}
   sizes: [2x2]
 - tile: room
   name: Mansarda
@@ -29,28 +29,33 @@ tiles:
   options: {room: sensor.mansarda_programma}
   sizes: [2x2]
 - tile: room
-  name: Lunga
-  entity: climate.lunga
-  options: {room: sensor.lunga_programma}
-  sizes: [2x2, 3x2]
+  name: Cucina
+  entity: climate.cucina
+  options: {room: sensor.cucina_programma}
+  sizes: [2x2]
+- tile: room
+  name: Spento
+  entity: climate.spento
+  options: {room: sensor.spento_programma}
+  sizes: [2x2]
 - tile: room
   name: Offline
   entity: climate.offline
   options: {room: sensor.offline_programma}
   sizes: [2x2]
 - tile: room
+  name: Studio
+  entity: climate.studio
+  options: {room: sensor.studio_programma}
+  sizes: [2x2]
+- tile: room
+  name: Lunga
+  entity: climate.lunga
+  options: {room: sensor.lunga_programma}
+  sizes: [2x2, 3x2]
+- tile: room
   name: Senza stanza
   entity: climate.senza
-  sizes: [2x2]
-- tile: room
-  name: Bagno
-  entity: climate.bagno
-  options: {room: sensor.bagno_programma}
-  sizes: [2x2]
-- tile: room
-  name: Cucina
-  entity: climate.cucina
-  options: {room: sensor.cucina_programma}
   sizes: [2x2]
 - tile: room
   name: Garage
@@ -78,6 +83,7 @@ tiles:
   entity: climate.grande
   options: {room: sensor.grande_programma}
   sizes: [2x2]
+
 states:
   climate.soggiorno:
     state: heat
@@ -287,6 +293,22 @@ states:
       next_mode: 1
       next_temp: 18
       next_start_time: '{epoch+90m}'
+      status: ok
+      manual: false
+      holiday: false
+  climate.spento:
+    state: 'off'
+    attributes: {min_temp: 7, max_temp: 35, target_temp_step: 0.5, temperature: 17, current_temperature: 18.8}
+  sensor.spento_programma:
+    state: Settimana
+    attributes:
+      today_start: [0, 390, 1380]
+      today_end: [390, 1380, 1440]
+      today_mode: [0, 0, 0]
+      today_temp: [-100, -100, -100]
+      today_auto: [0, 0, 0]
+      slot_mode: 0
+      slot_end_time: '{epoch+3h}'
       status: ok
       manual: false
       holiday: false

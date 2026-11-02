@@ -5,9 +5,9 @@ keys, and a bar with today's bands of its weekly program. A tap on the bar opens
 
 > Needs the cronotermostato integration 0.2.0 or later in Home Assistant, and the Tessera app must allow the plugin's
 > Home Assistant actions (`cronotermostato.set_manual` and `cronotermostato.resume_auto`) for this display.
-> This is an early version: the tile only **shows** things for now. The **+** and **-** keys and the Auto / Manual
-> keys do not work yet (they come in the next version). A tap on the bar should open the list of today's bands, but that
-> still has to be tried on a real screen (the bench cannot tap the bar).
+> The keys and the pill send those two actions to Home Assistant. They are checked on the plugin bench (the action and its
+> fields are right, and nothing leaves before 600 ms), **not yet on a real screen nor against a real thermostat**: try
+> them on a spare room first.
 
 ## Set up
 
@@ -23,12 +23,31 @@ keys, and a bar with today's bands of its weekly program. A tap on the bar opens
 - The room's name (when the tile is tall enough), the target in large digits between the **+** key (left) and the
   **-** key (right), and under it the temperature now, with a small amber dot while the thermostat heats and a blue one
   while it cools.
-- Under the numbers, a line that says the state of the program: "Auto" and the program's name, "Manual until 18:00",
+- Under the numbers, a line that says the state of the program: "Auto" and the program's name, "Manual until 18:00 x",
   "Paused", "No program", "Problem" or "Unavailable". A line "Then Heating 21.5 at 17:00" shows when the tile has the room.
 - A bar with today's bands, from 00:00 to 24:00: amber for heating, blue for cooling, grey for off, and a dark tick for
-  now. A tap on the bar (not on the rest of the tile) is meant to open the list of today's bands, the one of now marked
-  (to be tried on a real screen). The tap zone is the bar and the strip over it, never over the keys: about 6 mm high on the
-  CYD. A screen that cannot say where the finger touched never opens the card.
+  now.
+
+## What a tap does
+
+| Where | What happens |
+|---|---|
+| **+** (left) or **-** (right) | The target moves one step (the thermostat's own step and limits) and shows at once. 600 ms after the last tap one command goes out, `cronotermostato.set_manual` with the new temperature: the room is forced **until the end of the current band**, then the program takes over again. If Home Assistant does not report the new target within 5 seconds, the tile shows the real one again. |
+| The pill, while it says **Manual ... x** | Back to the program: one command, `cronotermostato.resume_auto`. The pill is drawn as a key (a chip behind it) only then. |
+| The bar (and the strip just over it) | Opens the list of today's bands, the one of now marked. |
+| Anywhere else | Nothing. |
+
+- There is no separate "Manual" key: pressing **+** or **-** already forces the room, and the pill then says "Manual".
+- `set_manual` needs a mode. The tile sends the mode the thermostat is in now (heating or cooling), else the mode of the
+  band of now; it never changes the mode. If the thermostat is off and the band is off too, the keys stay inert (a guess
+  could switch the room on).
+- The keys are dimmed and do nothing when the room has no program assigned, is paused, is unavailable, or the tile has no
+  climate entity. The pill acts only for a manual override.
+- The zones never overlap. The keys' zones are at least 11 mm wide; the pill and the bar zones run the full width of the
+  tile. On a small tile (the 2.8-inch CYD) the pill zone is less than the 7 mm of a comfortable key (the numbers are in the
+  report of the step); on the larger screens it is 7 mm.
+- A screen that cannot say where the finger touched (`tap_point()` gives -1,-1) does nothing on a tap. Where the zones
+  fall on a real finger is to be tried on a real screen.
 
 ## Good to know
 
