@@ -1,0 +1,144 @@
+# SPIKE data: the provisional tile with made-up rooms and a made-up room sensor.
+tiles:
+- tile: room
+  name: Soggiorno
+  entity: climate.soggiorno
+  options: {room: sensor.soggiorno_programma}
+  sizes: [2x2, 3x2]
+- tile: room
+  name: Camera
+  entity: climate.camera
+  options: {room: sensor.camera_programma, probe: card}
+  sizes: [2x2]
+- tile: room
+  name: Fresco
+  entity: climate.fresco
+  options: {room: sensor.fresco_programma}
+  sizes: [2x2]
+- tile: room
+  name: Lunga
+  entity: climate.lunga
+  options: {room: sensor.lunga_programma}
+  sizes: [2x2]
+- tile: room
+  name: Senza
+  entity: climate.senza
+  sizes: [2x2]
+- tile: room
+  name: Offline
+  entity: climate.offline
+  options: {room: sensor.soggiorno_programma}
+  sizes: [2x2]
+- tile: room
+  name: Enorme
+  entity: climate.enorme
+  options: {room: sensor.enorme_programma}
+  sizes: [2x2]
+states:
+  climate.soggiorno:
+    state: heat
+    attributes: {temperature: 21.5, current_temperature: 19.8, min_temp: 7, max_temp: 35, target_temp_step: 0.5, hvac_action: heating}
+  climate.camera:
+    state: heat
+    attributes: {temperature: 19, current_temperature: 18.2, min_temp: 7, max_temp: 35, target_temp_step: 0.5, hvac_action: idle}
+  climate.studio:
+    state: heat
+    attributes: {temperature: 20, current_temperature: 19, min_temp: 7, max_temp: 35, target_temp_step: 0.5}
+  climate.bagno:
+    state: heat
+    attributes: {temperature: 22, current_temperature: 21, min_temp: 7, max_temp: 35, target_temp_step: 0.5}
+  climate.cucina:
+    state: heat
+    attributes: {temperature: 20, current_temperature: 19, min_temp: 7, max_temp: 35, target_temp_step: 0.5}
+  climate.garage:
+    state: heat
+    attributes: {temperature: 20, current_temperature: 19, min_temp: 7, max_temp: 35, target_temp_step: 0.5}
+  climate.mansarda:
+    state: heat
+    attributes: {temperature: 20, current_temperature: 19, min_temp: 7, max_temp: 35, target_temp_step: 0.5}
+  climate.taverna:
+    state: heat
+    attributes: {temperature: 20, current_temperature: 19, min_temp: 7, max_temp: 35, target_temp_step: 0.5}
+  climate.ripostiglio:
+    state: heat
+    attributes: {temperature: 20, current_temperature: 19, min_temp: 7, max_temp: 35, target_temp_step: 0.5}
+  climate.fresco:
+    state: cool
+    attributes: {temperature: 24, current_temperature: 26.1, min_temp: 16, max_temp: 30, target_temp_step: 1, hvac_action: cooling}
+  climate.lunga:
+    state: heat
+    attributes: {temperature: 20.5, current_temperature: 19, min_temp: 7, max_temp: 35, target_temp_step: 0.5}
+  climate.senza:
+    state: 'off'
+    attributes: {current_temperature: 18.4, min_temp: 7, max_temp: 35}
+  climate.offline:
+    state: unavailable
+    attributes: {}
+  sensor.soggiorno_programma:
+    state: Settimana
+    attributes:
+      slot: {start: '06:30', end: '08:30', mode: heat, temp: 21}
+      next_slot: {start: '08:30', end: '17:00', mode: heat, temp: 18}
+      slot_end: '2026-11-02T18:00:00+01:00'
+      manual: true
+      override_until: '2026-11-02T18:00:00+01:00'
+      status: manual
+      today_start: [0, 390, 510, 1020, 1380]
+      today_end: [390, 510, 1020, 1380, 1440]
+      today_mode: [1, 1, 1, 1, 0]
+      today_temp: [17, 21, 18, 21.5, 0]
+      today_auto: [0, 0, 0, 0, 0]
+  sensor.camera_programma:
+    state: Settimana
+    attributes:
+      slot_end: '2026-11-02T22:00:00+01:00'
+      manual: false
+      today_start: [0, 360, 1320]
+      today_end: [360, 1320, 1440]
+      today_mode: [0, 1, 0]
+      today_temp: [0, 19, 0]
+      today_auto: [0, 0, 0]
+  sensor.fresco_programma:
+    state: Estate
+    attributes:
+      slot_end: '2026-11-02T20:00:00+01:00'
+      manual: false
+      today_start: [0, 600, 1200]
+      today_end: [600, 1200, 1440]
+      today_mode: [0, 2, 0]
+      today_temp: [0, 24, 0]
+      today_auto: [0, 0, 0]
+  sensor.lunga_programma:
+    state: Intensiva
+    attributes:
+      slot_end: '2026-11-02T13:30:00+01:00'
+      manual: false
+      today_start: [0, 90, 180, 270, 360, 450, 540, 630, 720, 810, 900, 990, 1080, 1170, 1260, 1350]
+      today_end: [90, 180, 270, 360, 450, 540, 630, 720, 810, 900, 990, 1080, 1170, 1260, 1350, 1440]
+      today_mode: [1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1]
+      today_temp: [17.5, 24, 0, 18.5, 25, 0, 19.5, 26, 0, 20.5, 27, 0, 21.5, 28, 0, 22.5]
+      today_auto: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+  climate.enorme:
+    state: heat
+    attributes: {temperature: 21, current_temperature: 20, min_temp: 7, max_temp: 35, target_temp_step: 0.5, hvac_action: heating}
+  sensor.enorme_programma:
+    state: Enorme
+    attributes:
+      slot_end: '2026-11-02T13:30:00+01:00'
+      manual: false
+      today_start: [0, 12, 24, 36, 48, 60, 72, 84, 96, 108, 120, 132, 144, 156, 168, 180, 192, 204, 216, 228, 240, 252, 264, 276, 288, 300, 312, 324, 336, 348, 360, 372, 384, 396, 408, 420, 432, 444, 456,
+        468, 480, 492, 504, 516, 528, 540, 552, 564, 576, 588, 600, 612, 624, 636, 648, 660, 672, 684, 696, 708, 720, 732, 744, 756, 768, 780, 792, 804, 816, 828, 840, 852, 864, 876, 888, 900, 912, 924,
+        936, 948, 960, 972, 984, 996, 1008, 1020, 1032, 1044, 1056, 1068, 1080, 1092, 1104, 1116, 1128, 1140, 1152, 1164, 1176, 1188, 1200, 1212, 1224, 1236, 1248, 1260, 1272, 1284, 1296, 1308, 1320, 1332,
+        1344, 1356, 1368, 1380, 1392, 1404, 1416, 1428]
+      today_end: [12, 24, 36, 48, 60, 72, 84, 96, 108, 120, 132, 144, 156, 168, 180, 192, 204, 216, 228, 240, 252, 264, 276, 288, 300, 312, 324, 336, 348, 360, 372, 384, 396, 408, 420, 432, 444, 456, 468,
+        480, 492, 504, 516, 528, 540, 552, 564, 576, 588, 600, 612, 624, 636, 648, 660, 672, 684, 696, 708, 720, 732, 744, 756, 768, 780, 792, 804, 816, 828, 840, 852, 864, 876, 888, 900, 912, 924, 936,
+        948, 960, 972, 984, 996, 1008, 1020, 1032, 1044, 1056, 1068, 1080, 1092, 1104, 1116, 1128, 1140, 1152, 1164, 1176, 1188, 1200, 1212, 1224, 1236, 1248, 1260, 1272, 1284, 1296, 1308, 1320, 1332, 1344,
+        1356, 1368, 1380, 1392, 1404, 1416, 1428, 1440]
+      today_mode: [0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0,
+        1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2]
+      today_temp: [17.5, 18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0, 20.5,
+        21.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0,
+        17.5, 18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0, 17.5,
+        18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0]
+      today_auto: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]

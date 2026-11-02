@@ -1,0 +1,20 @@
+{
+  "_meta": { "name": "Italiano" },
+  "screen": {
+    "now": "Ora {n}",
+    "until": "fino alle {t}",
+    "no_room": "Scegli il sensore",
+    "unavailable": "Non disponibile"
+  },
+  "app": {
+    "name": "Cronotermostato",
+    "summary": "Programmi settimanali di riscaldamento dell'integrazione cronotermostato, con le fasce di oggi su una barra.",
+    "tile_name": "Programma stanza",
+    "tile_example": "21,5, fino alle 18:00",
+    "card_name": "Fasce di oggi",
+    "room": "Sensore della stanza",
+    "room_hint": "Il sensore programma della stanza, per esempio sensor.soggiorno_programma.",
+    "probe": "Prova (spike)",
+    "probe_hint": "Solo per lo spike: cosa fa un tocco."
+  }
+}

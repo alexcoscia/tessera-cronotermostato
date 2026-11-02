@@ -1,0 +1,20 @@
+{
+  "_meta": { "name": "English" },
+  "screen": {
+    "now": "Now {n}",
+    "until": "until {t}",
+    "no_room": "Choose a room sensor",
+    "unavailable": "Unavailable"
+  },
+  "app": {
+    "name": "Cronotermostato",
+    "summary": "Weekly heating programs of the cronotermostato integration, with today's bands on a bar.",
+    "tile_name": "Room program",
+    "tile_example": "21.5, until 18:00",
+    "card_name": "Today's bands",
+    "room": "Room sensor",
+    "room_hint": "The program sensor of the room, such as sensor.living_room_program.",
+    "probe": "Probe (spike)",
+    "probe_hint": "Spike only: what a tap runs."
+  }
+}
