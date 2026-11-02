@@ -39,6 +39,12 @@ tiles:
   entity: climate.camera
   options: {room: sensor.camera_programma}
   sizes: [2x2, 3x2]
+# The option "Allow editing the bands" off: its card is the read-only list (tools/bench_flow.py opens it).
+- tile: room
+  name: Sola lettura
+  entity: climate.soggiorno
+  options: {room: sensor.soggiorno_programma, edit: false}
+  sizes: [1x1]
 - tile: room
   name: Fresco
   entity: climate.fresco

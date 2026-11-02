@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.0
+- **Edit the bands from the display.** The card of the bands has a key **Edit** (new option **Allow editing the bands**, on
+  by default). It lists the user bands of today (the automatic "off" bands are the integration's, never a row), with pages
+  `<` `>` and **+** to add one. A tap on a row opens the band: start and end with -1 h, -15 min, +15 min, +1 h; the mode
+  (heat, cool, off); the temperature with the step of the thermostat; Delete, Save and Back. Save sends
+  `cronotermostato.set_day` with the day it saw and the revision of the program it saw, and says Saving, Saved or the reason
+  it was not saved.
+- The program is shared: the change reaches every room that uses it ("Home - 3 rooms" is shown). Only today (or the
+  holiday part when today is one) can be edited here; the other days stay in Home Assistant.
+- If the program changes elsewhere while the list is open, the list reloads ("Changed elsewhere"); a locked band is shown
+  but not changed, and a day that has one cannot be saved from here.
+- Needs the integration **0.3.2 or later**. With the option off, or with an older integration, the card is the read-only
+  list of 0.1.x.
+- The new permission is `cronotermostato.set_day` (the manifest names it).
+
 ## 0.1.1
 - The tile is now offered from **1x1** (up to 3x2, as before). The layout editor starts a tile at one cell and grows it one
   axis at a time, so with a minimum of 2x2 the resize handles never appeared and the size stayed at 1x1.

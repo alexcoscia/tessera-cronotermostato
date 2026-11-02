@@ -25,9 +25,9 @@ comando a un termostato vero senza il via libera di Alex. Lo Scheduler di HA (ch
 - La stanza di prova `climate.termostato_casa` è in `heat` o `cool` (i tasti agiscono solo in questi modi) e ha un
   programma assegnato nell'integrazione.
 
-## 1. Aggiornare l'integrazione a 0.2.0 su HA di Alex
+## 1. Aggiornare l'integrazione a 0.3.2 su HA di Alex (PRIMA di aggiornare il plugin)
 
-Il tile legge le fasce di oggi (`today_*`) dal sensore di stanza, che esiste dalla 0.2.0. Copia l'integrazione:
+Il tile legge le fasce di oggi (`today_*`) dal sensore di stanza (dalla 0.2.0); la **modifica delle fasce** (plugin 0.2.0) legge anche `edit_info`, `edit_seq`, `edit_n`, `today_flags` e chiama `cronotermostato.set_day`, che esistono dalla **0.3.2**. Con un'integrazione più vecchia il plugin nuovo non offre il tasto Modifica (card in sola lettura), ma non va aggiornato il plugin prima dell'integrazione per non avere un tile che parla a un servizio che non c'è. Copia l'integrazione:
 
 ```sh
 rsync -rlt --exclude='__pycache__' /home/alexcoscia/cronotermostato/custom_components/cronotermostato/ ~/mnt_hass/homeassistant/custom_components/cronotermostato/
@@ -36,18 +36,18 @@ rsync -rlt --exclude='__pycache__' /home/alexcoscia/cronotermostato/custom_compo
 Poi riavvia Home Assistant (Impostazioni → Sistema → Riavvia). Un riavvio ricarica anche lo Scheduler: aspetta che sia
 tornato tutto disponibile e che i termostati abbiano un valore.
 
-Controllo: in HA, Impostazioni → Dispositivi e servizi → Cronotermostato, la versione è 0.2.0.
+Controllo: in HA, Impostazioni → Dispositivi e servizi → Cronotermostato, la versione è 0.3.2, e in Strumenti per sviluppatori → Azioni compare `Cronotermostato: set_day`.
 
 ## 2. Vedere gli attributi `today_*` in HA
 
 1. Strumenti per sviluppatori → Stati.
 2. Filtra per `sensor.` e scegli il sensore della stanza di prova (per esempio `sensor.termostato_casa_programma`).
-3. Negli attributi devono esserci: `today_start`, `today_end`, `today_mode`, `today_temp`, `today_auto`, `slot_mode`,
+3. Negli attributi devono esserci: `today_start`, `today_end`, `today_mode`, `today_temp`, `today_auto`, `today_flags`, `today_preset`, `edit_info`, `edit_seq`, `edit_n`, `slot_mode`,
    `slot_temp`, `slot_end_time`, `next_mode`, `next_temp`, `next_start_time`, `manual`, `override_until_time`, `status`,
    `holiday`. Le liste hanno la stessa lunghezza; `today_temp` = -100 vuol dire fascia senza temperatura.
 4. `status` deve essere `ok` (in prova vedrai anche `paused`, `unassigned` e gli altri).
 
-Se mancano gli attributi `today_*` l'integrazione non è alla 0.2.0 o il riavvio non è avvenuto.
+Se mancano gli attributi `today_*` l'integrazione non è alla 0.2.0 o il riavvio non è avvenuto; se mancano `edit_info`, `edit_seq`, `edit_n` o `today_flags` non è alla 0.3.2. `edit_info` ha la forma `giorno;stanze;revisione;errore` (per esempio `tue;1;3fa9c01b2d4e;`).
 
 ## 3. Mettere il plugin sullo schermo
 
@@ -72,7 +72,7 @@ Poi:
 1. Abilita il plugin per lo schermo; l'app costruisce il firmware (minuti) e aggiorna via Wi-Fi.
 2. In Layout metti il tile **Programma stanza** (da 1x1 a 3x2; per i tasti e la forma completa serve circa 2x2, vedi "Sizes" nel README).
 3. Nell'ispettore scegli `climate.termostato_casa` e il suo sensore `sensor.<stanza>_programma`.
-4. Controlla nel dispositivo il permesso per le azioni HA `cronotermostato.set_manual` e `cronotermostato.resume_auto`.
+4. Controlla nel dispositivo il permesso per le azioni HA `cronotermostato.set_manual`, `cronotermostato.resume_auto` e `cronotermostato.set_day`.
 
 ## 4. Cosa osservare, funzione per funzione
 
@@ -102,9 +102,9 @@ Dopo ogni prova guarda anche lo Scheduler: non deve essere cambiato nulla nelle 
 
 1. Il climate è in `heat` o `cool`? In `off`, `auto`, `heat_cool` i tasti sono volutamente spenti.
 2. La stanza ha un programma assegnato e non è in pausa? Il sensore deve avere `status: ok`.
-3. Il dispositivo ha il permesso per le azioni HA `cronotermostato.set_manual` e `cronotermostato.resume_auto`?
+3. Il dispositivo ha il permesso per le azioni HA `cronotermostato.set_manual`, `cronotermostato.resume_auto` e `cronotermostato.set_day`?
    Senza permesso lo schermo non invia nulla (nell'app Tessera, scheda del dispositivo, permessi delle azioni HA).
-4. L'integrazione è alla 0.2.0 e i servizi `cronotermostato.set_manual`/`resume_auto` esistono (Strumenti per sviluppatori
+4. L'integrazione è alla 0.3.2 e i servizi `cronotermostato.set_manual`/`resume_auto`/`set_day` esistono (Strumenti per sviluppatori
    → Azioni)?
 5. Il log dello schermo (nell'app Tessera) e il log di HA: cerca errori su `cronotermostato`.
 6. Il tocco cade nella zona giusta? Se la zona di tocco è troppo stretta (sul CYD la pillola è ~4,4 mm), annotalo: è un
@@ -123,7 +123,54 @@ Dopo ogni prova guarda anche lo Scheduler: non deve essere cambiato nulla nelle 
   e riavvia HA. Gli attributi `today_*` in più non danneggiano nulla.
 - **Scheduler:** non è stato toccato, continua a comandare i suoi termostati.
 
-## 7. Cosa riferire dopo la prova
+## 7. Prova della modifica delle fasce (plugin 0.2.0, integrazione 0.3.2)
+
+**ATTENZIONE: la modifica cambia un PROGRAMMA, e un programma è condiviso da tutte le stanze che lo usano.** Si prova SOLO
+con un **programma di prova assegnato alla sola stanza `climate.termostato_casa`**. Non si modifica dal display un
+programma usato da stanze di produzione. Prima della prova, in HA (pannello Cronotermostato):
+
+1. Crea un programma nuovo, per esempio "Prova display", copiando i giorni da uno vero se vuoi fasce realistiche.
+2. Assegnalo a `climate.termostato_casa` e a nessun'altra stanza (il titolo nella lista di modifica deve dire
+   "Prova display - 1 stanza"; se dice 2 o più, FERMATI: il programma è condiviso con un'altra stanza).
+3. Annota le fasce di oggi del programma di prova (o fai uno screenshot dell'editor di HA): servono per tornare indietro.
+4. Con l'integrazione già a 0.3.2 (sezione 1) aggiorna il plugin sullo schermo (sezione 3, "Build again") e controlla il
+   permesso `cronotermostato.set_day` del dispositivo.
+
+Il tile deve avere l'opzione **Consenti la modifica delle fasce** attiva (lo è di default).
+
+**Cosa osservare**
+
+| Passo | Cosa deve succedere |
+|---|---|
+| Tocco sulla barra | Si apre la card delle fasce di oggi con il tasto **Modifica** in alto a destra (alto almeno 7 mm). Se il tasto non c'è: stanza in pausa/non assegnata/non disponibile, integrazione < 0.3.2 o opzione spenta. |
+| **Modifica** | Elenco delle fasce utente di oggi, una riga per fascia (le fasce "spento" automatiche non sono righe), con il programma e "1 stanza" nel titolo (sul CYD nel mezzo del piè di pagina). Con più fasce delle righe: `<` `>` cambiano pagina. |
+| Tocco su una riga | Il dettaglio: Inizio e Fine con -1h -15 +15 +1h; il tasto del modo (Caldo/Freddo/Spento); la temperatura con − e +; Elimina, Salva, Indietro. |
+| Passi | Ogni tocco sposta di 15 min o 1 h (la temperatura del passo del termostato). Due tocchi sullo STESSO tasto entro 0,6 s contano come uno: è normale, aspetta un attimo. Un orario che non si può spostare ancora (contro la fascia accanto, meno di 15 min) non si muove e il tasto Salva/la riga di stato dice "Limite". |
+| **+** (Aggiungi) | Una fascia di un'ora nel primo buco di un'ora; "Pieno" a 16 fasce, "Nessuno spazio" se non c'è un buco. |
+| **Salva** | Un solo `cronotermostato.set_day` (HA: Strumenti per sviluppatori → Eventi/log, o il log del dispositivo `Sent service=cronotermostato.set_day`). Il tasto fa `...`, poi **Salvato** e si torna all'elenco con le fasce nuove; in HA l'editor mostra le stesse fasce. Il sensore cambia `program_revision` (campo 3 di `edit_info`). |
+| Errore | Se HA rifiuta il tasto dice il motivo breve (Errore / Cambiato / Fuori limite...) e in `edit_info` (ultimo campo) compare il codice (`stale_day`, `conflict`, `day_locked`, `invalid_bands`, `temp_range`, `invalid_program`). Senza risposta in 5 s: **Non salvato**. |
+| Cambiato altrove | Con la lista aperta, cambia una fascia dello stesso programma dall'editor di HA: la lista si ricarica e dice "Cambiato altrove"; le modifiche non salvate si perdono. |
+| Elimina | Toglie la fascia e salva subito. |
+| Indietro | Dal dettaglio all'elenco, buttando le modifiche non salvate; dall'elenco chiude la card (freccia in alto a sinistra). |
+| Fascia bloccata | Una fascia con preset/temperatura che il display non sa riscrivere si vede, è marcata "Bloccata" e non si apre; un giorno che ne ha una non si salva da qui. |
+| Mezzanotte | Se passa mezzanotte con l'elenco aperto: "Nuovo giorno", si ricarica il giorno nuovo. |
+| Opzione spenta | Spegni **Consenti la modifica delle fasce** nell'ispettore: la card torna in sola lettura (nessun tasto Modifica). |
+
+Da annotare: le zone di tocco (7 mm: comode?), quanto passa fra Salva e "Salvato", se i passi 15 min/1 h bastano, e su CYD/
+Hosyond se l'elenco a 3-4 righe per pagina è usabile. Non è stata misurata la memoria sul chip: se lo schermo si riavvia
+o perde il Wi-Fi aprendo la modifica, annotalo (e il giorno con più fasce).
+
+**Come tornare indietro (modifica)**
+
+- Rimetti le fasce del programma di prova come annotate: dall'editor di HA (pannello Cronotermostato), oppure dallo stesso
+  display con le stesse modifiche all'inverso.
+- Se il programma di prova non serve più: riassegna `climate.termostato_casa` al programma di prima e cancella "Prova
+  display" dal pannello.
+- Per fermare nuove modifiche dallo schermo: spegni l'opzione **Consenti la modifica delle fasce** del tile, o togli
+  `cronotermostato.set_day` dai permessi del dispositivo.
+- Per tornare al plugin 0.1.x: ricostruisci con la cartella di prova del commit precedente (la card torna in sola lettura).
+
+## 8. Cosa riferire dopo la prova
 
 Schermo e scheda usati, versione dell'app Tessera, cosa ha funzionato, cosa no, foto/screenshot di tile e card, e se le
 zone di tocco erano comode. Con questi dati si decide se passare ad altre stanze (una alla volta, con il via libera di

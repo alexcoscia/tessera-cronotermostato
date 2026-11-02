@@ -4,7 +4,7 @@
 // The maths (bands to pixels, texts, which pill) is in cronotermostato_logic.h, tested on a computer; here it becomes
 // widgets. What was tried before is in docs/SPIKE.md.
 #include "cronotermostato.h"
-#include "cronotermostato_logic.h"
+#include "cronotermostato_pad.h"
 #include "esphome/core/hal.h"
 #include "esphome/core/log.h"
 #include <algorithm>
@@ -129,6 +129,7 @@ class RoomTile : public tessera::Tile {
     entity_[0] = 0;
     if (c.entity && std::strlen(c.entity) < sizeof entity_) std::snprintf(entity_, sizeof entity_, "%s", c.entity);
     tile_ = c.tile;
+    edit_ = c.options["edit"] | true;   // the option: the card may offer to edit the bands (default on)
     w_ = c.width;
     h_ = c.height;
     decimal_ = decimal_of(plugin_);
@@ -340,7 +341,9 @@ class RoomTile : public tessera::Tile {
       case Zone::PLUS: return bump(+1);
       case Zone::MINUS: return bump(-1);
       case Zone::PILL: return resume();
-      case Zone::BAR: return (void) tessera::open_card(plugin_->plugin_id(), "day", entity_, tile_);
+      case Zone::BAR:
+        plugin_->set_card_edit(edit_);   // the card is made inside open_card and reads this
+        return (void) tessera::open_card(plugin_->plugin_id(), "day", entity_, tile_);
       default: return;
     }
   }
@@ -562,7 +565,7 @@ class RoomTile : public tessera::Tile {
   int w_ = 0, h_ = 0, tile_ = -1, now_bottom_ = 0, body_h_ = 0;
   TapGeometry zones_;
   ResumeGate resume_;
-  bool can_set_ = false, can_resume_ = false;
+  bool can_set_ = false, can_resume_ = false, edit_ = true;
   Mode cmd_mode_ = Mode::HEAT;
   const char *cross_ = "x";
   int bar_y_ = 0, bar_h_ = 0, tick_h_ = 0, tick_w_ = 0, tick_edge_ = 1, pill_y_ = 0, then_y_ = 0, set_y_ = 0, now_y_ = 0;
@@ -591,20 +594,66 @@ class RoomTile : public tessera::Tile {
 };
 
 // ---------------------------------------------------------------------------------------------------------------
-// The card: one row per band of today, "08:00-12:00  Heating  21.5°", the band of now marked.
+// The card. Three views in one: READ (one row per band of today, "08:00-12:00  Heating  21.5°", the band of now marked,
+// and the key "Edit" when the panel is allowed), LIST (one row per user band, to touch) and DETAIL (the band: start, end,
+// mode, temperature, Delete / Save / Back). The geometry and the zones are cronotermostato_pad.h (tested on a computer);
+// what a key does to the bands is EditModel / EditSession in cronotermostato_edit.h. Here they become blocks, labels and the
+// action `cronotermostato.set_day`.
+
+// A cut that does not split a UTF-8 character and ends in dots, for a text the room cannot hold (a name a person chose).
+static std::string fit_cut(std::string s, int max_w, Font font) {
+  if (ui::text_width(s, font) <= max_w) return s;
+  const char *dots = ui::covers("\xE2\x80\xA6", font) ? "\xE2\x80\xA6" : "..";
+  while (!s.empty()) {
+    size_t n = s.size() - 1;
+    while (n > 0 && ((unsigned char) s[n] & 0xC0) == 0x80) --n;
+    s.resize(n);
+    if (ui::text_width(s + dots, font) <= max_w) return s + dots;
+  }
+  return "";
+}
+
+// The lists of the room sensor as the edit model wants them: every list whole (up to one more than the model accepts, so
+// that a day too long is seen as damaged and never cut), the presets and the flags beside them.
+static EditInput read_edit_input(JsonObjectConst r, const std::string &program, const EditInfo &info) {
+  EditInput in;
+  const size_t cap = MAX_LIST_ITEMS + 1;
+  auto numbers = [&](const char *key, std::vector<double> &out, double fallback) {
+    JsonArrayConst a = r[key];
+    out.reserve(std::min(a.size(), cap));
+    for (size_t i = 0; i < a.size() && i < cap; ++i) out.push_back(number(a[i], fallback));
+  };
+  numbers("today_start", in.lists.start, NAN);
+  numbers("today_end", in.lists.end, NAN);
+  numbers("today_mode", in.lists.mode, 0);
+  numbers("today_temp", in.lists.temp, NO_TEMP);
+  numbers("today_flags", in.flags, NAN);
+  JsonArrayConst p = r["today_preset"];
+  in.preset.reserve(std::min(p.size(), cap));
+  for (size_t i = 0; i < p.size() && i < cap; ++i) in.preset.emplace_back(p[i] | "");
+  in.info = info;
+  in.info.seq = (int64_t) clamp_to(number(r["edit_seq"], 0), 0, 1e15, 0);
+  in.info.n = r["edit_n"].isNull() ? -1 : (int) clamp_to(number(r["edit_n"], -1), -1, 1e6, -1);
+  in.program_name = program;
+  return in;
+}
 
 class DayCard : public tessera::Card {
  public:
-  explicit DayCard(const tessera::Plugin *plugin) : plugin_(plugin) {}
+  explicit DayCard(Cronotermostato *plugin) : plugin_(plugin), edit_option_(plugin->card_edit()) {}
 
   void open(const tessera::CardContext &c) override {
     w_ = c.width;
+    h_ = c.height;
+    entity_[0] = 0;
+    if (c.entity && std::strlen(c.entity) < sizeof entity_) std::snprintf(entity_, sizeof entity_, "%s", c.entity);
     decimal_ = decimal_of(plugin_);
     const int pad = ui::px(6), gap = ui::px(8);
     const int body_h = ui::line_height(Font::BODY);
     line_ = body_h + ui::px(8);
     chip_w_ = ui::px(5);
     dash_ = ui::covers(EN_DASH, Font::BODY) ? EN_DASH : "-";
+    minus_ = ui::covers(MINUS, Font::BODY) ? MINUS : "-";
     time_w_ = ui::text_width(std::string("88:88") + dash_ + "88:88", Font::BODY);
     temp_w_ = ui::text_width("88.8\xC2\xB0", Font::BODY);
     now_w_ = ui::text_width(plugin_->text("right_now"), Font::BODY);
@@ -618,13 +667,37 @@ class DayCard : public tessera::Card {
     show_now_ = fixed + mode_long + gap + now_w_ <= w_;
     short_ = !show_now_ && fixed + mode_long > w_;
     mode_w_ = short_ ? mode_short : mode_long;
-    // A line over the rows says the program (and a holiday); the rows follow, as many as the height holds.
-    header_ = c.height >= 5 * line_;
-    top_ = header_ ? line_ : 0;
+
+    // The pad: the keys of the three views, from the real pixels (7 mm where the glass has them).
+    PadInput pi;
+    pi.w = w_;
+    pi.h = h_;
+    pi.key_h = std::max(ui::mm(7), body_h + ui::px(6));
+    pi.key_min_w = ui::mm(7);
+    pi.gap = std::max(2, ui::px(3));
+    pi.line_h = body_h;
+    pi.foot_w = ui::mm(9);
+    pi.time_w = ui::text_width("88:88", Font::BODY);
+    pi.cap_w = std::max(ui::text_width(std::string(plugin_->text("edit_start")) + " 88:88", Font::BODY),
+                        ui::text_width(std::string(plugin_->text("edit_end")) + " 88:88", Font::BODY));
+    int mode_key_w = 0;
+    for (Mode m : {Mode::HEAT, Mode::COOL, Mode::OFF}) mode_key_w = std::max(mode_key_w, ui::text_width(mode_word(plugin_, m, true), Font::BODY));
+    pi.mode_w = mode_key_w + 2 * ui::px(10);
+    pi.open_w = ui::text_width(plugin_->text("edit_open"), Font::BODY) + 2 * ui::px(12);
+    pi.key_max_w = ui::mm(26);
+    pi.key_max_h = ui::mm(12);
+    L_ = make_pad(pi);
+
+    // READ: a line over the rows says the program (and a holiday), with the key "Edit" at its right when it can be offered;
+    // the rows follow, as many as the height holds.
+    header_ = edit_option_ || c.height >= 5 * line_;
+    top_ = edit_option_ ? L_.read_top : (header_ ? line_ : 0);
     rows_ = std::max(1, std::min(MAX_SEGMENTS, (c.height - top_) / line_));
     hdr_ = ui::label(c.parent, Font::BODY, theme::MUTED);
-    lv_obj_set_width(hdr_, w_ - 2 * pad);
-    lv_obj_set_pos(hdr_, pad, (line_ - body_h) / 2);
+    const Rect hr = edit_option_ ? L_.read_head : Rect{0, 0, w_, line_};
+    hdr_w_ = std::max(1, (edit_option_ ? hr.w : w_) - 2 * pad);
+    lv_obj_set_width(hdr_, hdr_w_);
+    lv_obj_set_pos(hdr_, pad, hr.y + (hr.h - body_h) / 2);
     show(hdr_, header_);
     more_ = ui::label(c.parent, Font::BODY, theme::MUTED);
     lv_obj_set_width(more_, w_ - 2 * pad);
@@ -663,14 +736,20 @@ class DayCard : public tessera::Card {
         lv_obj_set_pos(r.now, w_ - pad - temp_w_ - gap - now_w_ - ui::px(2), ty);
       }
     }
+    parent_ = c.parent;
+    if (edit_option_) build_edit(c.parent);
+    paint();
   }
 
   void on_state(JsonObjectConst data) override {
     const TileInput in = read_input(data);
     const TileView view = tile_view(in);
     JsonObjectConst r = data["entities"]["room"]["attributes"];
-    step_ = number(data["attributes"]["target_temp_step"], 0.5);
+    JsonObjectConst a = data["attributes"];
+    step_ = number(a["target_temp_step"], 0.5);
+    range_ = make_range(number(a["min_temp"], 7), number(a["max_temp"], 35), step_);
     program_ = roomy::text(view.program);
+    const EditInfo info = parse_edit_info(std::string(r["edit_info"] | ""));
     holiday_ = std::string(r["edit_info"] | "").compare(0, 8, "holiday;") == 0;   // today_kind, first field of edit_info
     note_key_ = nullptr;
     n_ = 0;
@@ -692,33 +771,380 @@ class DayCard : public tessera::Card {
       if (n_ == 0) note_key_ = "no_bands";
     }
     minute_ = minute_of(now);
+
+    // The panel: offered when the option is on, the room can be commanded and edit_info is readable. What the sensor says is
+    // kept (while it is allowed) so that "Edit" opens on it; while the panel is open the session takes the news.
+    panel_ok_ = edit_option_ && panel_allowed(true, view, info);
+    if (panel_ok_) last_ = read_edit_input(r, roomy::plain(program_), info);
+    else last_ = EditInput();
+    if (session_.opened()) {
+      if (!panel_ok_) {
+        leave_edit();
+      } else {
+        session_.model().set_range(range_);
+        react(session_.on_state(last_, millis()));
+      }
+    }
     paint();
   }
 
-  // The band of now moves with the clock; the rows are the same.
+  // The band of now moves with the clock; the rows are the same. The waits of the panel run here too: the end of the wait
+  // for Home Assistant (5 s), the words that go away.
   void on_tick(uint32_t epoch) override {
+    const uint32_t now = millis();
+    bool redo = false;
+    if (session_.opened()) {
+      if (session_.tick(now)) redo = true;
+      if (transient_.any() && expired(now, transient_at_, MESSAGE_MS)) {
+        transient_ = TextKeys();
+        redo = true;
+      }
+      if (session_.state() == SaveState::SAVED && expired(now, saved_at_, MESSAGE_MS)) {
+        session_.acknowledge();
+        redo = true;
+      }
+    }
     const int minute = minute_of(epoch);
-    if (minute == minute_) return;
-    minute_ = minute;
-    for (int i = 0; i < n_; ++i)
-      rows_data_[i].current = minute >= 0 && rows_data_[i].start <= minute && minute < rows_data_[i].end;
-    paint();
+    if (minute != minute_) {
+      minute_ = minute;
+      for (int i = 0; i < n_; ++i)
+        rows_data_[i].current = minute >= 0 && rows_data_[i].start <= minute && minute < rows_data_[i].end;
+      redo = true;
+    }
+    if (redo) paint();
   }
 
   void on_theme() override { paint(); }
 
+  // Back from the detail goes to the list (what was changed and not saved is dropped); from the list the card closes.
+  bool on_back() override {
+    if (view_ == EView::DETAIL) {
+      go_back_to_list();
+      return true;
+    }
+    return false;
+  }
+
+  // One tap per card: tessera::tap_point() says where, pad_zone_at which key. A screen that cannot tell (-1,-1) does nothing.
+  void on_tap() override {
+    const tessera::Point at = tessera::tap_point();
+    const EZone z = pad_zone_at(L_, view_, view_ == EView::LIST ? session_.model().page_rows() : 0, at.x, at.y);
+    const uint32_t now = millis();
+    if (view_ == EView::READ) {
+      if (z.kind == EZ::OPEN && panel_ok_) enter_edit();
+      return;
+    }
+    if (!session_.opened()) return;
+    if (z.kind != EZ::SAVE) session_.acknowledge();   // the result of a save and a notice go with the next tap
+    transient_ = TextKeys();
+    EditModel &m = session_.model();
+    if (view_ == EView::LIST) {
+      switch (z.kind) {
+        case EZ::ROW: {
+          const int idx = m.page_first() + z.index;
+          const EditBand *b = m.band((size_t) idx);
+          if (!b) break;
+          if (b->locked) {
+            say(Msg::LOCKED);
+            break;
+          }
+          if (m.select(idx)) view_ = EView::DETAIL;
+          break;
+        }
+        case EZ::PREV: m.prev_page(); break;
+        case EZ::NEXT: m.next_page(); break;
+        case EZ::ADD: {
+          const EditResult res = m.add();
+          if (res.msg != Msg::NONE) say(res.msg);
+          if (res.changed) view_ = EView::DETAIL;
+          break;
+        }
+        default: break;
+      }
+    } else {
+      KeyStep ks;
+      EditResult res;
+      bool acted = true;
+      if (time_key(z.kind, ks)) {
+        res = ks.start ? m.move_start(ks.delta) : m.move_end(ks.delta);
+      } else {
+        switch (z.kind) {
+          case EZ::MODE: res = m.cycle_mode(); break;
+          case EZ::TEMP_M: res = m.step_temp(-1); break;
+          case EZ::TEMP_P: res = m.step_temp(+1); break;
+          case EZ::DELETE: delete_band(now); acted = false; break;
+          case EZ::SAVE: save(now); acted = false; break;
+          case EZ::BACK: go_back_to_list(); acted = false; break;
+          default: acted = false; break;
+        }
+      }
+      if (acted && res.msg != Msg::NONE) say(res.msg);
+    }
+    paint();
+  }
+
  private:
+  static constexpr uint32_t MESSAGE_MS = 4000;   // how long a word from a key stays in the status line
+
   struct Line {
     lv_obj_t *hl{}, *chip{}, *time{}, *mode{}, *temp{}, *now{};
   };
+  // A key: a block and its label (a child of the block; a label beside the block is "over another part" for the bench).
+  struct Key {
+    lv_obj_t *bg{}, *lb{};
+  };
+  // A row of the list: a key with the time, the mode, the word "locked" and the temperature in it.
+  struct ListRow {
+    lv_obj_t *bg{}, *time{}, *mode{}, *lock{}, *temp{};
+  };
+  enum Detail { K_S0, K_S1, K_S2, K_S3, K_E0, K_E1, K_E2, K_E3, K_MODE, K_TM, K_TP, K_DEL, K_SAVE, K_BACK, K_COUNT };
+
+  // --- building ------------------------------------------------------------------------------------------------
+  Key make_key(lv_obj_t *parent, const Rect &r) {
+    Key k;
+    k.bg = ui::block(parent, theme::RAISED);
+    lv_obj_set_style_pad_all(k.bg, 0, 0);
+    lv_obj_set_size(k.bg, r.w, r.h);
+    lv_obj_set_pos(k.bg, r.x, r.y);
+    k.lb = ui::label(k.bg, Font::BODY, theme::INK);
+    lv_obj_set_width(k.lb, r.w);
+    lv_obj_set_style_text_align(k.lb, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_pos(k.lb, 0, (r.h - ui::line_height(Font::BODY)) / 2);
+    return k;
+  }
+  lv_obj_t *make_label(lv_obj_t *parent, const Rect &r, lv_text_align_t align) {
+    lv_obj_t *l = ui::label(parent, Font::BODY, theme::INK);
+    lv_obj_set_width(l, r.w);
+    lv_obj_set_style_text_align(l, align, 0);
+    lv_obj_set_pos(l, r.x, r.y + (r.h - ui::line_height(Font::BODY)) / 2);
+    return l;
+  }
+  const Rect &detail_rect(int k) const {
+    switch (k) {
+      case K_S0: case K_S1: case K_S2: case K_S3: return L_.s_key[k - K_S0];
+      case K_E0: case K_E1: case K_E2: case K_E3: return L_.e_key[k - K_E0];
+      case K_MODE: return L_.mode_key;
+      case K_TM: return L_.temp_m;
+      case K_TP: return L_.temp_p;
+      case K_DEL: return L_.del;
+      case K_SAVE: return L_.save;
+      default: return L_.back;
+    }
+  }
+
+  void build_edit(lv_obj_t *parent) {
+    const int body_h = ui::line_height(Font::BODY);
+    const int pad = ui::px(8), gap = ui::px(8);
+    // LIST: header, rows, footer.
+    lhdr_ = make_label(parent, L_.list_head.empty() ? Rect{0, 0, w_, body_h} : L_.list_head, LV_TEXT_ALIGN_LEFT);
+    lv_obj_set_x(lhdr_, ui::px(6));
+    lv_obj_set_width(lhdr_, std::max(1, w_ - 2 * ui::px(6)));
+    lhdr_w_ = std::max(1, w_ - 2 * ui::px(6));
+    lempty_ = make_label(parent, Rect{0, L_.row[0].y, w_, L_.row_h}, LV_TEXT_ALIGN_LEFT);
+    lv_obj_set_x(lempty_, ui::px(6));
+    lv_obj_set_width(lempty_, std::max(1, w_ - 2 * ui::px(6)));
+    // The widest of the three words decides the column; a narrow row takes the short words.
+    int mode_long = 0, mode_short = 0;
+    for (Mode m : {Mode::HEAT, Mode::COOL, Mode::OFF}) {
+      mode_long = std::max(mode_long, ui::text_width(mode_word(plugin_, m, false), Font::BODY));
+      mode_short = std::max(mode_short, ui::text_width(mode_word(plugin_, m, true), Font::BODY));
+    }
+    const int fixed = 2 * pad + time_w_ + gap + temp_w_ + gap;
+    lrow_short_ = fixed + mode_long > w_;
+    lrow_mode_w_ = lrow_short_ ? mode_short : mode_long;
+    lock_w_ = ui::text_width(plugin_->text("locked_band"), Font::BODY);
+    lrow_lock_ = fixed + lrow_mode_w_ + gap + lock_w_ <= w_;
+    for (int i = 0; i < L_.rows; ++i) {
+      const Rect &r = L_.row[i];
+      ListRow &lr = lrow_[i];
+      lr.bg = ui::block(parent, theme::RAISED);
+      lv_obj_set_style_pad_all(lr.bg, 0, 0);
+      lv_obj_set_size(lr.bg, r.w, r.h);
+      lv_obj_set_pos(lr.bg, r.x, r.y);
+      const int ty = (r.h - body_h) / 2;
+      lr.time = ui::label(lr.bg, Font::BODY, theme::INK);
+      lv_obj_set_width(lr.time, time_w_ + ui::px(2));
+      lv_obj_set_pos(lr.time, pad, ty);
+      lr.mode = ui::label(lr.bg, Font::BODY, theme::INK);
+      lv_obj_set_width(lr.mode, lrow_mode_w_ + ui::px(2));
+      lv_obj_set_pos(lr.mode, pad + time_w_ + gap, ty);
+      lr.temp = ui::label(lr.bg, Font::BODY, theme::INK);
+      lv_obj_set_width(lr.temp, temp_w_ + ui::px(2));
+      lv_obj_set_style_text_align(lr.temp, LV_TEXT_ALIGN_RIGHT, 0);
+      lv_obj_set_pos(lr.temp, r.w - pad - temp_w_ - ui::px(2), ty);
+      lr.lock = ui::label(lr.bg, Font::BODY, theme::MUTED);
+      lv_obj_set_width(lr.lock, lock_w_ + ui::px(2));
+      lv_obj_set_style_text_align(lr.lock, LV_TEXT_ALIGN_RIGHT, 0);
+      lv_obj_set_pos(lr.lock, r.w - pad - temp_w_ - gap - lock_w_ - ui::px(2), ty);
+    }
+    foot_[0] = make_key(parent, L_.prev);
+    foot_[1] = make_key(parent, L_.next);
+    foot_[2] = make_key(parent, L_.add);
+    ui::set_text(foot_[0].lb, "<");
+    ui::set_text(foot_[1].lb, ">");
+    ui::set_text(foot_[2].lb, "+");
+    info_ = make_label(parent, L_.info, LV_TEXT_ALIGN_CENTER);
+    // DETAIL: a status line, the captions, the keys and the value of the temperature.
+    dhdr_ = make_label(parent, L_.detail_header ? L_.detail_head : Rect{0, 0, w_, body_h}, LV_TEXT_ALIGN_LEFT);
+    lv_obj_set_x(dhdr_, ui::px(6));
+    lv_obj_set_width(dhdr_, std::max(1, w_ - 2 * ui::px(6)));
+    cap_[0] = make_label(parent, L_.s_cap, LV_TEXT_ALIGN_LEFT);
+    cap_[1] = make_label(parent, L_.e_cap, LV_TEXT_ALIGN_LEFT);
+    lv_obj_set_x(cap_[0], ui::px(2));
+    lv_obj_set_x(cap_[1], ui::px(2));
+    for (int k = 0; k < K_COUNT; ++k) det_[k] = make_key(parent, detail_rect(k));
+    tval_ = make_label(parent, L_.temp_val, LV_TEXT_ALIGN_CENTER);
+    const char *steps[4] = {"-1h", "-15", "+15", "+1h"};
+    for (int i = 0; i < 4; ++i) {
+      std::string t = steps[i];
+      if (t[0] == '-') t = std::string(minus_) + t.substr(1);
+      ui::set_text(det_[K_S0 + i].lb, t);
+      ui::set_text(det_[K_E0 + i].lb, t);
+    }
+    ui::set_text(det_[K_TM].lb, minus_);
+    ui::set_text(det_[K_TP].lb, "+");
+    ui::set_text(det_[K_DEL].lb, plugin_->text("edit_delete"));
+    ui::set_text(det_[K_BACK].lb, plugin_->text("edit_back"));
+    open_ = make_key(parent, L_.open);
+    ui::set_text(open_.lb, plugin_->text("edit_open"));
+  }
+
+  // --- the views -----------------------------------------------------------------------------------------------
+  void enter_edit() {
+    if (!panel_ok_) return;
+    session_.open(last_, range_, L_.rows, entity_);
+    transient_ = TextKeys();
+    view_ = EView::LIST;
+    paint();
+  }
+  void leave_edit() {
+    session_.close();
+    session_ = EditSession();   // frees what the copy kept
+    transient_ = TextKeys();
+    view_ = EView::READ;
+  }
+  // The copy goes back to what Home Assistant has, unless a save is under way (then it is the copy that was sent).
+  void go_back_to_list() {
+    if (session_.state() != SaveState::SAVING) session_.model().load(last_);
+    session_.model().deselect();
+    view_ = EView::LIST;
+    paint();
+  }
+  void say(Msg m) {
+    transient_ = msg_text(m);
+    transient_at_ = millis();
+  }
+  void say(const TextKeys &k) {
+    transient_ = k;
+    transient_at_ = millis();
+  }
+
+  // The events of on_state: after the news the copy may have changed under the person's finger.
+  void react(EditEvent ev) {
+    switch (ev) {
+      case EditEvent::SAVED:
+        view_ = EView::LIST;
+        session_.model().deselect();
+        saved_at_ = millis();
+        break;
+      case EditEvent::CHANGED_ELSEWHERE:
+      case EditEvent::DAY_CHANGED:
+        view_ = EView::LIST;
+        break;
+      case EditEvent::SAVE_FAILED:
+        if (session_.model().selected() < 0) view_ = EView::LIST;
+        break;
+      default: break;
+    }
+    if (view_ == EView::DETAIL && session_.model().selected() < 0) view_ = EView::LIST;
+  }
+
+  // Save: once, to Home Assistant. The keys explain what stops it.
+  void save(uint32_t now) {
+    if (session_.state() == SaveState::IDLE) {
+      const SaveBlock block = session_.save_block();
+      if (block != SaveBlock::NONE || !session_.can_save()) {
+        say(block_text(block));
+        return;
+      }
+    }
+    send_request(session_.press_save(now));
+  }
+  void send_request(const SaveRequest &rq) {
+    if (!rq.send) return;
+    JsonDocument fields;
+    fields["climate_entity_id"] = entity_;
+    fields["day_kind"] = rq.day_kind;
+    fields["bands"] = rq.bands;
+    if (!rq.base_revision.empty()) fields["base_revision"] = rq.base_revision;
+    if (!tessera::action("cronotermostato.set_day", "", fields)) session_.send_failed();
+  }
+  // Delete is delete and save: the list has no Save key. If the day cannot be saved the copy goes back and the key says why.
+  void delete_band(uint32_t now) {
+    EditModel &m = session_.model();
+    const EditResult res = m.remove();
+    if (res.msg != Msg::NONE) {
+      say(res.msg);
+      return;
+    }
+    if (!res.changed) return;
+    const SaveBlock block = m.save_block();
+    if (block != SaveBlock::NONE) {
+      m.load(last_);
+      say(block_text(block));
+    } else {
+      send_request(session_.press_save(now));
+    }
+    m.deselect();
+    view_ = EView::LIST;
+  }
+
+  // --- painting ------------------------------------------------------------------------------------------------
+  // The text of a message in the room it has: the long form, else the short one, else the short one cut.
+  std::string pick(const TextKeys &k, int width) const {
+    const std::string full = plugin_->text(k.full);
+    if (ui::text_width(full, Font::BODY) <= width) return full;
+    return fit_cut(plugin_->text(k.shortly), width, Font::BODY);
+  }
+  TextKeys status() const { return status_of(session_.state(), session_.notice(), session_.error(), transient_); }
+  // "Casa - 3 stanze", else the count alone, else the count's number.
+  std::string title_for(int width) const {
+    const std::string one = plugin_->text("room_one"), many = plugin_->text("room_many");
+    std::string t = session_.title(one.c_str(), many.c_str());
+    if (ui::text_width(t, Font::BODY) <= width) return t;
+    const int rooms = session_.rooms();
+    if (rooms >= 0) {
+      t = std::to_string(rooms) + " " + (rooms == 1 ? one : many);
+      if (ui::text_width(t, Font::BODY) <= width) return t;
+      t = std::to_string(rooms);
+      if (ui::text_width(t, Font::BODY) <= width) return t;
+    }
+    return "";
+  }
 
   void paint() {
-    // The header: the program's name and "Holiday" when today is one.
+    paint_read();
+    paint_list();
+    paint_detail();
+    log_pad();
+  }
+
+  void paint_read() {
+    const bool on = view_ == EView::READ;
+    // The header: the program's name and "Holiday" when today is one; the name is cut before the key.
     std::string head = roomy::plain(program_);
     if (holiday_) head += (head.empty() ? "" : " \xC2\xB7 ") + std::string(plugin_->text("holiday"));
-    ui::set_text(hdr_, head);
+    if (ui::text_width(head, Font::BODY) > hdr_w_) head = roomy::plain(program_);
+    ui::set_text(hdr_, fit_cut(head, hdr_w_, Font::BODY));
     ui::set_color(hdr_, theme::MUTED);
-    ui::set_text(note_, note_key_ ? plugin_->text(note_key_) : "");
+    show(hdr_, on && header_);
+    const bool key = on && edit_option_ && panel_ok_;
+    show(open_.bg, key);
+    if (open_.bg) {
+      ui::set_fill(open_.bg, Tone::NORMAL, theme::RAISED);
+      ui::set_color(open_.lb, theme::INK);
+    }
+    ui::set_text(note_, on && note_key_ ? plugin_->text(note_key_) : "");
     ui::set_color(note_, theme::MUTED);
     // The window of rows: all of them, or the ones around the band of now.
     int cur = 0;
@@ -727,7 +1153,7 @@ class DayCard : public tessera::Card {
     // More bands than rows: the last row's place says how many are left out ("+3 more").
     const int vis = n_ > rows_ && rows_ > 1 ? rows_ - 1 : rows_;
     const int first = n_ > vis ? std::min(std::max(cur - vis / 2, 0), n_ - vis) : 0;
-    const bool more = n_ > vis;
+    const bool more = on && n_ > vis;
     show(more_, more);
     if (more) {
       lv_obj_set_y(more_, top_ + vis * line_ + (line_ - ui::line_height(Font::BODY)) / 2);
@@ -737,7 +1163,7 @@ class DayCard : public tessera::Card {
     for (int i = 0; i < rows_; ++i) {
       Line &r = row_[i];
       const int idx = first + i;
-      const bool shown = i < vis && idx < n_;
+      const bool shown = on && i < vis && idx < n_;
       for (lv_obj_t *part : {r.chip, r.time, r.mode, r.temp}) show(part, shown);
       if (!shown) {
         show(r.hl, false);
@@ -761,11 +1187,172 @@ class DayCard : public tessera::Card {
     }
   }
 
-  const tessera::Plugin *plugin_;
-  int w_ = 0, line_ = 0, top_ = 0, rows_ = 0, chip_w_ = 0, time_w_ = 0, temp_w_ = 0, now_w_ = 0, mode_w_ = 0;
+  static void key_state(const Key &k, bool enabled) {
+    ui::set_fill(k.bg, Tone::NORMAL, theme::RAISED);
+    ui::set_color(k.lb, enabled ? theme::INK : theme::MUTED);
+  }
+
+  void paint_list() {
+    if (!edit_option_) return;
+    const bool on = view_ == EView::LIST && session_.opened();
+    const EditModel &m = session_.model();
+    const TextKeys st = on ? status() : TextKeys();
+    const bool header = L_.list_header;
+    show(lhdr_, on && header);
+    const int shown = on ? m.page_rows() : 0;
+    const int first = m.page_first();
+    show(lempty_, on && m.size() == 0);
+    ui::set_text(lempty_, on && m.size() == 0 ? plugin_->text("edit_empty") : "");
+    ui::set_color(lempty_, theme::MUTED);
+    for (int i = 0; i < L_.rows; ++i) {
+      ListRow &lr = lrow_[i];
+      const bool vis = i < shown;
+      show(lr.bg, vis);
+      if (!vis) continue;
+      const EditBand &b = *m.band((size_t) (first + i));
+      ui::set_fill(lr.bg, Tone::NORMAL, theme::RAISED);
+      const theme::Role ink = b.locked ? theme::MUTED : theme::INK;
+      ui::set_text(lr.time, format_clock(b.start) + dash_ + format_clock(b.end));
+      ui::set_color(lr.time, ink);
+      const bool lock_word = b.locked && !lrow_lock_;   // no room for both: the word stands for the mode
+      ui::set_text(lr.mode, lock_word ? plugin_->text("locked_band") : mode_word(plugin_, b.mode, lrow_short_));
+      ui::set_color(lr.mode, ink);
+      std::string temp;
+      if (b.mode != Mode::OFF && b.has_temp) temp = format_temp(to_degrees(b.centi), step_, decimal_, true);
+      else if (b.mode != Mode::OFF && !b.preset.empty()) temp = fit_cut(b.preset, temp_w_, Font::BODY);
+      ui::set_text(lr.temp, temp);
+      ui::set_color(lr.temp, ink);
+      show(lr.lock, b.locked && lrow_lock_);
+      ui::set_text(lr.lock, b.locked && lrow_lock_ ? plugin_->text("locked_band") : "");
+      ui::set_color(lr.lock, theme::MUTED);
+    }
+    for (int i = 0; i < 3; ++i) show(foot_[i].bg, on);
+    show(info_, on);
+    if (!on) {
+      show(lhdr_, false);
+      return;
+    }
+    key_state(foot_[0], m.page() > 0);
+    key_state(foot_[1], m.page() + 1 < m.page_count());
+    key_state(foot_[2], true);
+    // The words: the header takes the status, else the title; the page goes to the footer. Without a header (a short glass)
+    // the footer's middle is the only line: the status, else the title and the page.
+    const std::string page = m.page_count() > 1 ? page_numbers(m.page(), m.page_count()) : "";
+    if (header) {
+      ui::set_text(lhdr_, st.any() ? pick(st, lhdr_w_) : title_for(lhdr_w_));
+      ui::set_color(lhdr_, st.any() ? theme::INK : theme::MUTED);
+      ui::set_text(info_, page);
+      ui::set_color(info_, theme::MUTED);
+    } else {
+      const int iw = std::max(1, L_.info.w);
+      std::string t;
+      if (st.any()) {
+        t = pick(st, iw);
+      } else {
+        const std::string head = title_for(iw);
+        const std::string both = head.empty() ? page : (page.empty() ? head : head + " " + page);
+        t = ui::text_width(both, Font::BODY) <= iw ? both : (page.empty() ? head : page);
+      }
+      ui::set_text(info_, fit_cut(t, iw, Font::BODY));
+      ui::set_color(info_, st.any() ? theme::INK : theme::MUTED);
+    }
+  }
+
+  void paint_detail() {
+    if (!edit_option_) return;
+    const bool on = view_ == EView::DETAIL && session_.opened() && session_.model().selected() >= 0;
+    show(dhdr_, on && L_.detail_header);
+    show(cap_[0], on);
+    show(cap_[1], on);
+    show(tval_, on);
+    for (int k = 0; k < K_COUNT; ++k) show(det_[k].bg, on);
+    if (!on) return;
+    const EditModel &m = session_.model();
+    const EditBand &b = *m.band((size_t) m.selected());
+    const bool live = !m.frozen() && !b.locked;
+    const SaveState state = session_.state();
+    const TextKeys st = status();
+    // The captions: "Start 06:00", or the time alone when the caption has no room.
+    const std::string t0 = format_clock(b.start), t1 = format_clock(b.end);
+    ui::set_text(cap_[0], L_.captions ? std::string(plugin_->text("edit_start")) + " " + t0 : t0);
+    ui::set_text(cap_[1], L_.captions ? std::string(plugin_->text("edit_end")) + " " + t1 : t1);
+    ui::set_color(cap_[0], theme::INK);
+    ui::set_color(cap_[1], theme::INK);
+    for (int i = 0; i < 4; ++i) {
+      key_state(det_[K_S0 + i], live);
+      key_state(det_[K_E0 + i], live);
+    }
+    ui::set_text(det_[K_MODE].lb, mode_word(plugin_, b.mode, true));
+    key_state(det_[K_MODE], live);
+    std::string temp = "--";
+    if (b.mode != Mode::OFF && b.has_temp) temp = format_temp(to_degrees(b.centi), step_, decimal_, true);
+    else if (b.mode != Mode::OFF && !b.preset.empty()) temp = fit_cut(b.preset, std::max(1, L_.temp_val.w), Font::BODY);
+    ui::set_text(tval_, temp);
+    ui::set_color(tval_, theme::INK);
+    key_state(det_[K_TM], live && b.mode != Mode::OFF);
+    key_state(det_[K_TP], live && b.mode != Mode::OFF);
+    key_state(det_[K_DEL], live);
+    key_state(det_[K_BACK], true);
+    // Save: the state of the save, else a word from a key (when there is no status line), else "Save". Grey when it cannot.
+    const int kw = L_.save.w - ui::px(6);
+    std::string label = plugin_->text(save_key(state));
+    if (!L_.detail_header) {
+      // No status line (a short glass): the key carries the word. A refusal says why in its short form ("Changed").
+      if (state == SaveState::IDLE && st.any()) label = pick(st, kw);
+      else if (state == SaveState::ERROR && st.any() && ui::text_width(plugin_->text(st.shortly), Font::BODY) <= kw) label = plugin_->text(st.shortly);
+    }
+    ui::set_text(det_[K_SAVE].lb, fit_cut(label, kw, Font::BODY));
+    key_state(det_[K_SAVE], state != SaveState::IDLE || session_.can_save());
+    if (L_.detail_header) {
+      ui::set_text(dhdr_, st.any() ? pick(st, std::max(1, w_ - 2 * ui::px(6))) : title_for(std::max(1, w_ - 2 * ui::px(6))));
+      ui::set_color(dhdr_, st.any() ? theme::INK : theme::MUTED);
+    }
+  }
+
+  // For the bench (docs/PROVA_SU_SCHERMO.md, tools/bench_flow.py): where the keys are, once per change of what is shown.
+  void log_pad() {
+    const int shown = view_ == EView::LIST ? session_.model().page_rows() : 0;
+    const int page = view_ == EView::LIST ? session_.model().page() : 0;
+    const int state = session_.opened() ? (int) session_.state() : -1;
+    if (logged_view_ == (int) view_ && logged_page_ == page && logged_shown_ == shown && logged_state_ == state && !panel_changed()) return;
+    logged_view_ = (int) view_;
+    logged_page_ = page;
+    logged_shown_ = shown;
+    logged_state_ = state;
+    logged_ok_ = panel_ok_;
+    lv_area_t a;
+    lv_obj_update_layout(parent_);
+    lv_obj_get_coords(parent_, &a);
+    char line[640];
+    int n = std::snprintf(line, sizeof line, "CRONOPAD view=%d page=%d state=%d origin=%d,%d", (int) view_, page, state, (int) a.x1, (int) a.y1);
+    auto add = [&](const char *name, const Rect &r) {
+      if (!r.empty() && n < (int) sizeof line - 40) n += std::snprintf(line + n, sizeof line - n, " %s:%d,%d,%d,%d", name, r.x, r.y, r.w, r.h);
+    };
+    if (view_ == EView::READ) {
+      if (panel_ok_) add("open", L_.open);
+    } else if (view_ == EView::LIST) {
+      static const char *const rows[PAD_MAX_ROWS] = {"row0", "row1", "row2", "row3", "row4", "row5", "row6",
+                                                      "row7", "row8", "row9", "row10", "row11", "row12", "row13"};
+      for (int i = 0; i < shown; ++i) add(rows[i], L_.row[i]);
+      add("prev", L_.prev);
+      add("next", L_.next);
+      add("add", L_.add);
+    } else {
+      static const char *const names[K_COUNT] = {"s-60", "s-15", "s+15", "s+60", "e-60", "e-15", "e+15", "e+60", "mode", "t-", "t+", "del", "save", "back"};
+      for (int k = 0; k < K_COUNT; ++k) add(names[k], detail_rect(k));
+    }
+    ESP_LOGI(TAG, "%s", line);
+  }
+  bool panel_changed() const { return logged_ok_ != panel_ok_; }
+
+  Cronotermostato *plugin_;
+  const bool edit_option_;   // the tile's option `edit`: without it the card is the list of bands and nothing else
+  char entity_[96]{};
+  int w_ = 0, h_ = 0, line_ = 0, top_ = 0, rows_ = 0, chip_w_ = 0, time_w_ = 0, temp_w_ = 0, now_w_ = 0, mode_w_ = 0, hdr_w_ = 0;
   bool header_ = false, show_now_ = false, short_ = false, holiday_ = false;
   char decimal_ = '.';
   const char *dash_ = "-";
+  const char *minus_ = "-";
   const char *note_key_ = nullptr;
   double step_ = 0.5;
   int n_ = 0, minute_ = -2;
@@ -773,6 +1360,23 @@ class DayCard : public tessera::Card {
   Row rows_data_[MAX_SEGMENTS];
   Line row_[MAX_SEGMENTS];
   lv_obj_t *hdr_{}, *note_{}, *more_{};
+  // The panel
+  PadLayout L_;
+  EView view_ = EView::READ;
+  bool panel_ok_ = false;
+  SetpointRange range_;
+  EditInput last_;         // what the sensor said last (kept while the panel is allowed): "Edit" opens on it, Back reloads it
+  EditSession session_;
+  TextKeys transient_;     // a word from a key, for MESSAGE_MS
+  uint32_t transient_at_ = 0, saved_at_ = 0;
+  lv_obj_t *parent_{};
+  lv_obj_t *lhdr_{}, *lempty_{}, *info_{}, *dhdr_{}, *tval_{}, *cap_[2]{};
+  ListRow lrow_[PAD_MAX_ROWS];
+  Key foot_[3], det_[K_COUNT], open_;
+  int lhdr_w_ = 0, lrow_mode_w_ = 0, lock_w_ = 0;
+  bool lrow_short_ = false, lrow_lock_ = false;
+  int logged_view_ = -1, logged_page_ = -1, logged_shown_ = -1, logged_state_ = -2;
+  bool logged_ok_ = false;
 };
 
 void Cronotermostato::on_interval(uint32_t now_ms) {

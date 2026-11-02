@@ -2,7 +2,7 @@
 # entities): the target temperature with plus and minus keys, and a bar with today's bands of the room's program.
 # Every field is explained in docs/MANIFEST.md of tessera-plugins.
 id: cronotermostato
-version: 0.1.1
+version: 0.2.0
 api: "0.24"
 icon: thermometer
 maintainer: alexcoscia
@@ -53,3 +53,5 @@ tiles:
         attributes: [today_start, today_end, today_mode, today_temp, today_flags, today_preset, slot_end_time, next_mode, next_temp, next_start_time, manual, override_until_time, status, edit_info, edit_seq, edit_n]
         label: room
         hint: room_hint
+      # The key Edit on the card of the bands (plan 4): on by default; off, the card only shows the bands.
+      - { id: edit, kind: toggle, label: edit, hint: edit_hint, default: true }

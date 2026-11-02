@@ -18,9 +18,13 @@ class Cronotermostato : public Component, public tessera::Plugin {
   // A tile made / gone. attach() is false when MAX_TILES are already there: that tile then sends at once.
   bool attach(RoomTile *tile);
   void detach(RoomTile *tile);
+  // The tile that opens the card says whether its option `edit` is on; the card, made inside open_card, reads it.
+  void set_card_edit(bool on) { card_edit_ = on; }
+  bool card_edit() const { return card_edit_; }
 
  private:
   RoomTile *tiles_[MAX_TILES]{};
+  bool card_edit_ = true;
 };
 
 }  // namespace esphome::cronotermostato

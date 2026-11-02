@@ -10,10 +10,13 @@ the list of today's bands.
 ## Needs
 
 - The **cronotermostato integration 0.2.0 or later** in Home Assistant. Older versions do not give the tile today's bands.
+  To **edit the bands from the display** (see below) it must be **0.3.2 or later**: the screen reads `edit_info`,
+  `edit_seq`, `edit_n` and `today_flags`, and calls `cronotermostato.set_day`. With an older integration the card stays
+  read-only.
 - A `climate` entity for the room, and the room's program sensor from the integration, `sensor.<room>_program` (in an
   Italian Home Assistant `sensor.<room>_programma`).
-- The screen must be allowed to call two Home Assistant actions: `cronotermostato.set_manual` and
-  `cronotermostato.resume_auto`. The keys and the pill send them.
+- The screen must be allowed to call three Home Assistant actions: `cronotermostato.set_manual` and
+  `cronotermostato.resume_auto` (the keys and the pill) and `cronotermostato.set_day` (Save in the editing of the bands).
 
 ## Set up
 
@@ -23,9 +26,11 @@ the list of today's bands.
 3. In the tile's inspector, choose the room's **climate entity** (for example `climate.living_room`).
 4. Choose the **room program sensor**. The list shows every sensor: pick the one of the same room that ends in
    `_program` (`_programma` in Italian).
-5. Allow the actions `cronotermostato.set_manual` and `cronotermostato.resume_auto` for this display, if the app asks.
-   Without that permission the keys do nothing.
-6. Make sure the integration in Home Assistant is version 0.2.0 or later, and that the room has a program assigned.
+5. Allow the actions `cronotermostato.set_manual`, `cronotermostato.resume_auto` and `cronotermostato.set_day` for this
+   display, if the app asks. Without the first two the keys do nothing; without the third Save does nothing.
+6. Make sure the integration in Home Assistant is version 0.3.2 or later (0.2.0 is enough without the editing), and that
+   the room has a program assigned.
+7. Optional: the tile's option **Allow editing the bands** is on by default; turn it off for a screen that must only show.
 
 ## What the tile shows
 
@@ -59,8 +64,54 @@ Without the keys the tile never commands a temperature. Without the state line a
 |---|---|
 | **+** (left) or **-** (right) | The target moves one step (the thermostat's own step and limits) and shows at once. 600 ms after the last tap one command goes out, `cronotermostato.set_manual` with the new temperature: the room is forced **until the end of the current band**, then the program takes over again. If Home Assistant does not report the new target within 5 seconds, the tile shows the real one again. |
 | The pill, while it says **Manual ... x** | Back to the program: one command, `cronotermostato.resume_auto`. The pill is drawn as a key (a chip behind it) only then. |
-| The bar, and the strip just over it | Opens the list of today's bands, the one of now marked. |
+| The bar, and the strip just over it | Opens the list of today's bands, the one of now marked, with the key **Edit** (see the next section). |
 | Anywhere else | Nothing. |
+
+## Editing the bands from the display
+
+The card of the bands has a key **Edit** (top right) when the room can be commanded (it has a program, is not paused and
+is available), the integration is 0.3.2 or later and the tile's option **Allow editing the bands** is on (it is, by
+default). Without any of these the card is the plain list of bands, as before.
+
+What it does:
+
+1. **Edit** shows the **user bands** of today, one row each (start and end, mode, temperature or preset). The automatic
+   "off" bands the integration fills in between are gaps, not rows. The title says which program and how many rooms use it
+   ("Home - 3 rooms"). Rows are at least 7 mm high where the glass allows it; as many as fit stand on a page, and **<** **>**
+   turn the pages. **+** adds a band of one hour in the first gap that holds one, with the mode and temperature of the band
+   before it.
+2. A tap on a row opens the band: **Start** and **End** each with **-1 h, -15, +15, +1 h** (the steps are big on purpose:
+   two taps on the same spot within 0.6 s count as one), the mode key (heat, cool, off), the temperature with the step
+   and the limits of the thermostat, **Delete**, **Save** and **Back**. A band cannot be made shorter than 15 minutes nor
+   run into its neighbours; the key says "Limit" when it cannot move.
+3. **Save** sends one `cronotermostato.set_day` with `climate_entity_id`, the day it saw (`day_kind`), the whole list of
+   bands (`bands`, as text) and the revision of the program it saw (`base_revision`). The key says **...** while it waits,
+   **Saved** (and the list comes back with the new bands) or **Error** / the reason, or **Not saved** after 5 seconds
+   without an answer. **Delete** removes the band and saves at once. **Back** drops what was changed and not saved.
+
+Good to know:
+
+- **The program is shared.** A change reaches **every room that uses the program**, not only this one. The title shows how
+  many rooms ("3 rooms"). There is no copy per room: to give a room its own bands, assign it another program in Home
+  Assistant.
+- **Only today** can be changed here: today's day of the week, or the holiday part when today is a holiday. The other days
+  stay in the editor in Home Assistant. If midnight passes while the list is open, it reloads on the new day ("New day").
+- **Whoever saves last wins, unless somebody saved in between.** The screen sends the revision of the program it saw; if
+  the program changed meanwhile the integration refuses (`conflict`) and the screen says so ("Changed elsewhere"), and
+  the list reloads with the new bands. A change made in Home Assistant while the list is open does the same. What was
+  being edited is lost; do it again.
+- **Locked bands** (a preset or temperature the display cannot write back, or bands the integration locks) are shown and
+  marked **Locked**, never changed, and a day that has one cannot be saved from here: Save says why.
+- A day the display reads incompletely (lists cut by the screen's limit, an old integration) is shown but never saved.
+- At most **16 bands** a day (the integration's limit); **+** says "Full" at 16 and "No room" when no gap is an hour long.
+- The tile's option **Allow editing the bands** (default on). Turn it off per tile to keep the card read-only.
+- **Small boards.** On the 2.8-inch CYD there is no room for a title line: the middle of the footer carries the program, the
+  number of rooms and the page, or the message of the moment, and the band has no status line: the **Save** key carries
+  the word. Everything is still 7 mm high (the CYD band has only 7 px to spare).
+- The card keeps the copy of the bands in the memory inside the chip while it is open (about 1 to 2 KB for a day of eight
+  bands, up to about 6 KB for 16, freed when you leave the list). The objects of the screen are in the card, which Tessera
+  makes in PSRAM on the boards that have it. The CYD has no PSRAM: it was not measured there.
+- It needs the Tessera API 0.24 (a card with taps and `tap_point()`); nothing else changes in the tile.
 
 ## Limits
 
@@ -96,6 +147,11 @@ Without the keys the tile never commands a temperature. Without the state line a
 - **A real Home Assistant.** The keys and the pill send the two actions with the right fields (checked on the bench), but
   they were not yet sent to a real Home Assistant, nor to a real thermostat. The tap on the bar and the list of bands
   (the card) were drawn on the bench but not tried by hand on a screen.
+- **The editing.** `set_day` is called with the fields the integration expects (checked on the bench with real taps, and the
+  integration's own tests cover the service), but it was never called on a real Home Assistant from a real screen. How
+  fast Home Assistant answers, how the 7 mm keys feel under a finger, the memory the card takes on the chip, and a long
+  list of strings in the real core are not known. Try it first with a program of its own assigned to one test room
+  (`docs/PROVA_SU_SCHERMO.md`).
 
 ## Development
 
@@ -111,6 +167,21 @@ tests/run.sh
 `tests/frontend/cases.json`); the bar must match them within a pixel. `tests/overlap.inc` holds a day with overlapping
 bands: the editor draws them over each other, the tile trims the later one (a deliberate difference). Regenerate both with
 `node tools/gen_parity.mjs [path of the integration repository]` (default `../cronotermostato`).
+
+The touch flow of the bench (`tools/bench_flow.py`) opens the card of the first room tile with real taps, enters the
+editing, adds a band, saves, answers the way the integration does (new bands, a refusal, a change made elsewhere), deletes,
+waits for the timeout and opens a tile whose option `edit` is off. It checks the `cronotermostato.set_day` call (day,
+revision, text of the bands) and photographs every step, light and dark, into `.preview-flow/<board>/`. It needs the bench
+of `tessera-plugins` (set up once with `preview.py --setup`) and its Python:
+
+```sh
+tools/bench_flow.sh cyd            # or guition, waveshare7b, jc8012p4a1: pictures in .preview-flow/<board>/<board>/flow-*.png
+TESSERA_PLUGINS=/path/to/tessera-plugins tools/bench_flow.sh cyd   # when it is not beside this repository
+```
+
+It prints `FLOW <board> PASS|FAIL <check>` lines and ends with status 1 if a check fails. The card logs one line
+`CRONOPAD view=... name:x,y,w,h ...` when what it shows changes: the script reads the keys from it. The geometry and the
+zones of the editing are in `components/cronotermostato/cronotermostato_pad.h`, tested by `tests/test_pad.cpp`.
 
 The notes of the first spike on the plugin API are in `docs/SPIKE.md` (history). The checklist for trying the plugin on a
 real screen is in `docs/PROVA_SU_SCHERMO.md` (Italian).
