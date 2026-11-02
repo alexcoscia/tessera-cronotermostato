@@ -70,7 +70,6 @@ static TileInput read_input(JsonObjectConst data) {
   // Never cast a raw number: not finite or out of range would be undefined behaviour.
   in.slot_end = (int64_t) clamp_to(number(r["slot_end_time"], 0), 0, MAX_EPOCH, 0);
   in.override_until = (int64_t) clamp_to(number(r["override_until_time"], 0), 0, MAX_EPOCH, 0);
-  in.slot_mode = (int) clamp_to(number(r["slot_mode"], -1), -1, 99, -1);
   in.next_mode = (int) clamp_to(number(r["next_mode"], -1), -1, 99, -1);
   in.next_temp = number(r["next_temp"], NAN);
   in.next_start = (int64_t) clamp_to(number(r["next_start_time"], 0), 0, MAX_EPOCH, 0);
@@ -125,8 +124,10 @@ class RoomTile : public tessera::Tile {
   ~RoomTile() override { plugin_->detach(this); }
 
   void create(const tessera::TileContext &c) override {
-    // The climate of the tile: what the two actions name. Empty (a firmware that does not give it): the keys stay inert.
-    std::snprintf(entity_, sizeof entity_, "%s", c.entity ? c.entity : "");
+    // The climate of the tile: what the two actions name. Empty when the firmware does not give it, or when it does not fit
+    // (a cut id would command another entity): the keys and the pill then stay inert.
+    entity_[0] = 0;
+    if (c.entity && std::strlen(c.entity) < sizeof entity_) std::snprintf(entity_, sizeof entity_, "%s", c.entity);
     tile_ = c.tile;
     w_ = c.width;
     h_ = c.height;
@@ -244,7 +245,7 @@ class RoomTile : public tessera::Tile {
     body_h_ = body_h;
     place_zones();
     cross_ = ui::covers(CROSS, Font::BODY) ? CROSS : ui::covers(TIMES, Font::BODY) ? TIMES : "x";
-    attached_ = plugin_->attach(this);
+    plugin_->attach(this);
   }
 
   void on_state(JsonObjectConst data) override {
@@ -256,7 +257,7 @@ class RoomTile : public tessera::Tile {
     controls_ = view.controls;
     can_set_ = view.can_set && entity_[0] != 0;
     cmd_mode_ = view.command_mode;
-    can_resume_ = view.pill == Pill::MANUAL && view.can_resume && entity_[0] != 0;
+    can_resume_ = pill_is_key(view, entity_[0] != 0);   // also while the pill says "Problem"
     resume_.on_state(in.manual);
     bar_visible_ = view.bar_visible;
     program_ = roomy::text(view.program);
@@ -343,19 +344,19 @@ class RoomTile : public tessera::Tile {
     zones_.keys_live = can_set_;
     zones_.bar_tappable = bar_visible_;
     zones_.pill_tappable = can_resume_;
+    // Sideways the pill zone is its chip and a margin, so a touch beside it does not drop the override.
+    pill_span(w_, ui::text_width(pill_text(), Font::BODY) + 2 * ui::px(10), ui::mm(2), zones_.pill_x0, zones_.pill_x1);
     lower_zones(h_, keys_bottom_, pill_y_, body_h_, now_bottom_, tick_h_, ui::mm(7), zones_.pill_tappable, zones_.pill_top,
                 zones_.pill_bottom, zones_.bar_top);
   }
 
-  // + or -: the shown value moves one step at once; the command follows 600 ms after the last tap (at once when the plugin
-  // has no room to wait for this tile).
+  // + or -: the shown value moves one step at once; the command follows 600 ms after the last tap, from the plugin's 250 ms
+  // interval, or (a tile it could not attach, past 16) from this tile's own once-a-second on_tick: later, never sooner.
   void bump(int direction) {
     if (!can_set_ || resume_.waiting(millis())) return;
     const uint32_t now = millis();
     if (!setpoint_.on_tap(direction, now)) return;   // no target, or already at the limit: nothing to send
     paint();
-    int value = 0;
-    if (!attached_ && setpoint_.take(now + DEBOUNCE_MS, value)) send(value);
   }
 
   // set_manual: the service has no entity_id, the climate goes in the fields; `mode` is required, so it is the mode the
@@ -395,7 +396,7 @@ class RoomTile : public tessera::Tile {
       case Pill::CHOOSE_ROOM: return plugin_->text("no_room");
       case Pill::PAUSED: return plugin_->text("paused");
       case Pill::NO_PROGRAM: return plugin_->text("no_program");
-      case Pill::PROBLEM: return plugin_->text("problem");
+      case Pill::PROBLEM: return std::string(plugin_->text("problem")) + (can_resume_ ? std::string(" ") + cross_ : std::string());
       case Pill::MANUAL: {
         // "Manual until 18:00 x", else "Until 18:00 x", else "Manual x": the cross says the pill is a key.
         const std::string cross = can_resume_ ? std::string(" ") + cross_ : std::string();
@@ -508,6 +509,7 @@ class RoomTile : public tessera::Tile {
     ui::set_fill(pill_bg_, Tone::NORMAL, can_resume_ ? theme::TRACK : theme::CARD);
     lv_obj_set_width(pill_, std::min(cw, tw + ui::px(2)));
     lv_obj_center(pill_);
+    place_zones();
     if (show_then_) {
       ui::set_text(then_, then_text());
       ui::set_color(then_, theme::MUTED);
@@ -519,7 +521,7 @@ class RoomTile : public tessera::Tile {
   int w_ = 0, h_ = 0, tile_ = -1, now_bottom_ = 0, body_h_ = 0;
   TapGeometry zones_;
   ResumeGate resume_;
-  bool can_set_ = false, can_resume_ = false, attached_ = false;
+  bool can_set_ = false, can_resume_ = false;
   Mode cmd_mode_ = Mode::HEAT;
   const char *cross_ = "x";
   int bar_y_ = 0, bar_h_ = 0, tick_h_ = 0, tick_w_ = 0, tick_edge_ = 1, pill_y_ = 0, then_y_ = 0, set_y_ = 0, now_y_ = 0;

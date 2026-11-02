@@ -38,14 +38,18 @@ keys, and a bar with today's bands of its weekly program. A tap on the bar opens
 | Anywhere else | Nothing. |
 
 - There is no separate "Manual" key: pressing **+** or **-** already forces the room, and the pill then says "Manual".
-- `set_manual` needs a mode. The tile sends the mode the thermostat is in now (heating or cooling), else the mode of the
-  band of now; it never changes the mode. If the thermostat is off and the band is off too, the keys stay inert (a guess
-  could switch the room on).
-- The keys are dimmed and do nothing when the room has no program assigned, is paused, is unavailable, or the tile has no
-  climate entity. The pill acts only for a manual override.
-- The zones never overlap. The keys' zones are at least 11 mm wide; the pill and the bar zones run the full width of the
-  tile. On a small tile (the 2.8-inch CYD) the pill zone is less than the 7 mm of a comfortable key (the numbers are in the
-  report of the step); on the larger screens it is 7 mm.
+- **+** and **-** act only while the thermostat is in `heat` or `cool`, and they send that same mode with `set_manual`
+  (the service requires one). They never switch a room on and never change its mode. In any other state (off, auto,
+  heat_cool, dry, fan_only, unavailable) the keys are dimmed and do nothing.
+- The keys are also dimmed and do nothing when the room has no program assigned, is paused, is unavailable, or the tile
+  has no usable climate entity (an id too long for the tile counts as none).
+- The pill is a key for any manual override, also while it says "Problem x". Only the chip and a small margin around it
+  react, not the whole row; while the command is on its way its text is dimmed.
+- In automatic the bar zone also covers the line "Auto · Program" (up to 7 mm over the bar), so a tap there opens the list
+  of bands.
+- The zones never overlap. The keys' zones are at least 11 mm wide; the bar zone runs the full width of the tile. On a
+  small tile (the 2.8-inch CYD) the pill zone is less than the 7 mm of a comfortable key (about 4.4 mm); on the larger
+  screens it is 7 mm.
 - A screen that cannot say where the finger touched (`tap_point()` gives -1,-1) does nothing on a tap. Where the zones
   fall on a real finger is to be tried on a real screen.
 

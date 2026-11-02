@@ -508,7 +508,6 @@ struct TileInput {
   bool manual = false;
   int64_t slot_end = 0;        // slot_end_time
   int64_t override_until = 0;  // override_until_time
-  int slot_mode = -1;          // slot_mode code of the band now (0 off, 1 heat, 2 cool), -1 when absent
   int next_mode = -1;          // next_mode code, -1 when absent
   double next_temp = NAN;      // next_temp, NaN when absent
   int64_t next_start = 0;      // next_start_time
@@ -526,7 +525,7 @@ struct TileView {
   double next_temp = 0;
   int64_t next_start = 0;
   bool controls = false;       // the room may be commanded (not unassigned, paused, down)
-  bool can_set = false;        // + and - work: controls, and the mode to send is known
+  bool can_set = false;        // + and - work: controls, and the climate heats or cools (its mode is the one sent)
   Mode command_mode = Mode::OFF;   // the mode set_manual is sent with (only valid when can_set)
   bool can_resume = false;     // the "MANUAL x" / Auto key can resume the program
   bool bar_visible = false;    // the day bar is worth drawing
@@ -542,13 +541,12 @@ inline std::string cut_name(const std::string &s) {
 inline bool is_down(const std::string &s) { return s.empty() || s == "unavailable" || s == "unknown"; }
 }  // namespace detail
 
-// The mode a + or - sends with set_manual (the service requires one): the mode the thermostat is in now when it heats or
-// cools, else the mode of the band of now; -1 when neither heats nor cools (the keys stay inert: a guess could switch a
-// room on).
-inline int command_mode_code(const std::string &climate_state, int slot_mode) {
+// The mode a + or - sends with set_manual (the service requires one): the thermostat's own, and only while it heats or
+// cools. Any other state (off, auto, heat_cool, dry, fan_only, down) gives -1: the keys stay inert, because a mode taken from
+// the band could switch the room on or change what the thermostat does. 1 heat, 2 cool.
+inline int command_mode_code(const std::string &climate_state) {
   if (climate_state == "heat") return 1;
   if (climate_state == "cool") return 2;
-  if (slot_mode == 1 || slot_mode == 2) return slot_mode;
   return -1;
 }
 
@@ -588,7 +586,7 @@ inline TileView tile_view(const TileInput &in) {
   if (v.pill == Pill::NO_PROGRAM) return v;
   if (!no_program) v.program = detail::cut_name(in.room_state);
   v.controls = true;
-  const int code = command_mode_code(in.climate_state, in.slot_mode);
+  const int code = command_mode_code(in.climate_state);
   v.can_set = code >= 0;
   v.command_mode = code >= 0 ? mode_from_code(code) : Mode::OFF;
   v.bar_visible = true;
@@ -616,6 +614,7 @@ enum class Zone { NONE, PLUS, MINUS, PILL, BAR };
 struct TapGeometry {
   int w = 0, h = 0;
   int key_w = 0, key_y = 0, key_h = 0, gap = 0, key_reach = 0;   // the drawn keys; key_reach: the least height of a key's hit area
+  int pill_x0 = 0, pill_x1 = 0;        // the pill's hit area sideways: the chip and a margin, [pill_x0, pill_x1)
   int pill_top = 0, pill_bottom = 0;   // the pill's hit area (used only when pill_tappable); pill_bottom is where the bar zone starts
   int bar_top = 0;                     // the bar zone: [bar_top, h)
   bool pill_tappable = false, bar_tappable = false, keys_live = false;
@@ -626,7 +625,7 @@ inline Zone zone_at(const TapGeometry &g, int x, int y) {
   if (x < 0 || y < 0 || x >= g.w || y >= g.h) return Zone::NONE;
   const int lower = g.pill_tappable ? g.pill_top : g.bar_top;   // where the zones of the keys must stop
   if (y >= g.bar_top) return g.bar_tappable ? Zone::BAR : Zone::NONE;
-  if (g.pill_tappable && y >= g.pill_top && y < g.pill_bottom) return Zone::PILL;
+  if (g.pill_tappable && y >= g.pill_top && y < g.pill_bottom) return x >= g.pill_x0 && x < g.pill_x1 ? Zone::PILL : Zone::NONE;
   if (!g.keys_live) return Zone::NONE;
   const int grow = std::max(0, (g.key_reach - g.key_h) / 2);
   const int top = std::max(0, g.key_y - grow), bottom = std::min(lower, g.key_y + g.key_h + grow);
@@ -635,6 +634,20 @@ inline Zone zone_at(const TapGeometry &g, int x, int y) {
   if (x < edge) return Zone::PLUS;
   if (x >= g.w - edge) return Zone::MINUS;
   return Zone::NONE;
+}
+
+// Whether the pill is a key: the override can be resumed (also while the pill says "Problem") and the climate id is known.
+inline bool pill_is_key(const TileView &v, bool has_entity) { return v.can_resume && has_entity; }
+
+// The pill's hit area sideways: the chip centred in a tile `w` wide, `margin` pixels more on each side, inside the tile.
+inline void pill_span(int w, int chip_w, int margin, int &x0, int &x1) {
+  if (w <= 0) {
+    x0 = x1 = 0;
+    return;
+  }
+  const int half = (std::max(chip_w, 0) + 1) / 2 + std::max(margin, 0);
+  x0 = std::max(0, w / 2 - half);
+  x1 = std::min(w, (w + 1) / 2 + half);
 }
 
 // The pill zone and the bar zone under the keys. `pill_y` / `body_h`: the pill's text; `above`: the lowest y the pill zone

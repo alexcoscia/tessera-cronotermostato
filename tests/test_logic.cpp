@@ -1279,44 +1279,45 @@ TEST(choose_layout_degrades_without_negative_positions) {
 // ---------------------------------------------------------------------------------------------------------------
 // Step 5: the command mode, the tap zones, the single resume, cancel
 
-TEST(command_mode_follows_the_thermostat_then_the_band) {
-  CHECK(command_mode_code("heat", -1) == 1);
-  CHECK(command_mode_code("cool", 1) == 2);          // the thermostat's own mode wins over the band's
-  CHECK(command_mode_code("heat_cool", 2) == 2);     // a mode the service does not take: the band says
-  CHECK(command_mode_code("auto", 1) == 1);
-  CHECK(command_mode_code("off", 1) == 1);           // switched off, the band heats: forcing heat is what + asks
-  CHECK(command_mode_code("off", 0) == -1);          // nothing heats or cools: no guess
-  CHECK(command_mode_code("off", -1) == -1);
-  CHECK(command_mode_code("heat_cool", 7) == -1);
+TEST(command_mode_is_only_the_thermostats_own_heat_or_cool) {
+  // The keys never switch a room on and never change its mode: only a climate that heats or cools is commanded, and with its
+  // own mode; the band plays no part.
+  CHECK(command_mode_code("heat") == 1 && command_mode_code("cool") == 2);
+  for (const char *state : {"off", "auto", "heat_cool", "dry", "fan_only", "unavailable", ""}) CHECK(command_mode_code(state) == -1);
+  for (const char *state : {"off", "auto", "heat_cool", "dry", "fan_only", "unavailable", "unknown", "", "HEAT"}) {
+    TileInput in = base_input();
+    in.climate_state = state;
+    TileView v = tile_view(in);
+    const bool down = std::string(state).empty() || std::string(state) == "unavailable" || std::string(state) == "unknown";
+    CHECK(!v.can_set);
+    if (!down) CHECK(v.controls);                       // the room is commandable in principle, the mode is not
+  }
+  TileInput heat = base_input();
+  heat.climate_state = "heat";
+  TileView h = tile_view(heat);
+  CHECK(h.can_set && h.command_mode == Mode::HEAT);
+  TileInput cool = base_input();
+  cool.climate_state = "cool";
+  TileView c = tile_view(cool);
+  CHECK(c.can_set && c.command_mode == Mode::COOL);
   CHECK_STR(mode_name(Mode::HEAT), "heat");
   CHECK_STR(mode_name(Mode::COOL), "cool");
   CHECK_STR(mode_name(Mode::OFF), "off");
 }
 
-TEST(tile_view_can_set_needs_controls_and_a_mode) {
+TEST(tile_view_can_set_needs_controls_and_heat_or_cool) {
   TileInput in = base_input();
   TileView v = tile_view(in);
   CHECK(v.controls && v.can_set && v.command_mode == Mode::HEAT);
-  in.climate_state = "cool";
-  v = tile_view(in);
-  CHECK(v.can_set && v.command_mode == Mode::COOL);
-  in.climate_state = "off";
-  v = tile_view(in);
-  CHECK(v.controls && !v.can_set);                    // off and no band that heats: keys inert
-  in.slot_mode = 2;
-  v = tile_view(in);
-  CHECK(v.can_set && v.command_mode == Mode::COOL);
-  // no command where the room cannot be commanded
+  // no command where the room cannot be commanded, whatever the climate does
   for (const char *status : {"unassigned", "not_running", "paused", "unavailable", "missing"}) {
     TileInput x = base_input();
     x.status = status;
-    x.slot_mode = 1;
     TileView w = tile_view(x);
     CHECK(!w.controls && !w.can_set);
   }
   TileInput none = base_input();
   none.has_room = false;
-  none.slot_mode = 1;
   CHECK(!tile_view(none).can_set);
   TileInput down = base_input();
   down.climate_state = "unavailable";
@@ -1326,8 +1327,27 @@ TEST(tile_view_can_set_needs_controls_and_a_mode) {
   man.manual = true;
   TileView m = tile_view(man);
   CHECK(m.pill == Pill::MANUAL && m.can_resume && m.can_set);
-  TileInput aut = base_input();
-  CHECK(!tile_view(aut).can_resume);
+  CHECK(!tile_view(base_input()).can_resume);
+}
+
+TEST(pill_is_a_key_when_the_override_can_be_resumed_also_in_problem) {
+  TileInput in = base_input();
+  in.manual = true;
+  in.status = "error";
+  TileView v = tile_view(in);
+  CHECK(v.pill == Pill::PROBLEM && v.can_resume);
+  CHECK(pill_is_key(v, true));                          // "Problem x": the cross and the zone, as for MANUAL
+  CHECK(!pill_is_key(v, false));                        // no climate id: inert
+  in.status = "ok";
+  CHECK(pill_is_key(tile_view(in), true));
+  in.manual = false;
+  CHECK(!pill_is_key(tile_view(in), true));             // automatic: not a key
+  for (const char *status : {"paused", "unassigned", "unavailable"}) {
+    TileInput x = base_input();
+    x.manual = true;
+    x.status = status;
+    CHECK(!pill_is_key(tile_view(x), true));            // nothing to resume where the room is not commanded
+  }
 }
 
 TEST(setpoint_cancel_drops_the_wait_and_shows_the_real_value) {
@@ -1385,9 +1405,25 @@ static TapGeometry zones_for(int w, int h, int key_w, int key_y, int key_h, bool
   g.gap = 8;
   g.key_reach = 40;
   g.pill_tappable = pill;
+  g.pill_x0 = 80;
+  g.pill_x1 = 220;
   g.bar_tappable = bar;
   g.keys_live = true;
   return g;
+}
+
+TEST(pill_span_is_the_chip_plus_a_margin_inside_the_tile) {
+  int x0 = -1, x1 = -1;
+  pill_span(300, 100, 10, x0, x1);
+  CHECK(x0 == 90 && x1 == 210);                           // 100 wide chip centred, 10 px each side
+  pill_span(300, 290, 20, x0, x1);
+  CHECK(x0 == 0 && x1 == 300);                            // never beyond the tile
+  pill_span(300, 0, 10, x0, x1);
+  CHECK(x0 == 140 && x1 == 160);
+  pill_span(0, 50, 10, x0, x1);
+  CHECK(x0 == 0 && x1 == 0);
+  pill_span(301, 100, 10, x0, x1);
+  CHECK(x0 <= 91 && x1 >= 209 && x1 <= 301 && x0 >= 0);
 }
 
 TEST(lower_zones_cyd_like_small_tile) {
@@ -1436,7 +1472,12 @@ TEST(zone_at_partitions_the_tile) {
   CHECK(zone_at(g, 235, 30) == Zone::NONE);
   CHECK(zone_at(g, 236, 30) == Zone::MINUS);
   CHECK(zone_at(g, 150, 60) == Zone::PILL);
-  CHECK(zone_at(g, 10, 75) == Zone::PILL);                // the pill row spans the width, under the keys too
+  CHECK(zone_at(g, 80, 75) == Zone::PILL);                // the pill zone is the chip and a margin: x 80..219
+  CHECK(zone_at(g, 219, 75) == Zone::PILL);
+  CHECK(zone_at(g, 79, 75) == Zone::NONE);                // beside it nothing: a stray touch does not drop the override
+  CHECK(zone_at(g, 220, 75) == Zone::NONE);
+  CHECK(zone_at(g, 10, 75) == Zone::NONE);
+  CHECK(zone_at(g, 290, 75) == Zone::NONE);
   CHECK(zone_at(g, 150, 89) == Zone::PILL);
   CHECK(zone_at(g, 150, 90) == Zone::BAR);
   CHECK(zone_at(g, 10, 109) == Zone::BAR);
@@ -1482,7 +1523,8 @@ TEST(zone_at_small_keys_grow_to_the_reach_but_never_into_the_pill) {
   CHECK(zone_at(g, 10, 10) == Zone::PLUS);
   CHECK(zone_at(g, 10, 9) == Zone::NONE);
   CHECK(zone_at(g, 10, 44) == Zone::PLUS);
-  CHECK(zone_at(g, 10, 45) == Zone::PILL);                // the pill zone cuts the key's reach
+  CHECK(zone_at(g, 100, 45) == Zone::PILL);               // the pill zone cuts the key's reach
+  CHECK(zone_at(g, 10, 45) == Zone::NONE);
 }
 
 TEST(resume_gate_sends_once_until_ha_answers) {
