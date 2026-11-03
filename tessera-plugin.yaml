@@ -2,7 +2,7 @@
 # entities): the target temperature with plus and minus keys, and a bar with today's bands of the room's program.
 # Every field is explained in docs/MANIFEST.md of tessera-plugins.
 id: cronotermostato
-version: 0.2.1
+version: 0.2.2
 api: "0.24"
 icon: thermometer
 maintainer: alexcoscia
@@ -33,8 +33,9 @@ tiles:
     # tall), or the target alone (narrow, low). Not larger than 3x2: past that the screen is mostly empty space (seen
     # on the 10-inch at 4x4), and a third row would show nothing more.
     sizes: { min: 1x1, max: 3x2 }
-    # 21 blocks (16 bands, the track, the "now" tick, the dot, 2 keys) and 7 labels (name, target, now, then, pill, 2 on the keys), plus the bands the tile keeps.
-    memory: 3000
+    # 21 blocks (16 bands, the track, the "now" tick, the dot, 2 keys) and 23 labels (name, target, now, then, pill, 2 on the keys,
+    # and 16 on the bands: the value of each, 0.2.2), plus the bands the tile keeps (each with its preset).
+    memory: 5000
     domains: [climate]
     # What the tile reads of the climate: the target and the temperature now, the keys' limits and step, the action.
     attributes: [temperature, current_temperature, min_temp, max_temp, target_temp_step, hvac_action]

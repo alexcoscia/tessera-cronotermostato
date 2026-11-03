@@ -39,6 +39,16 @@ tiles:
   entity: climate.camera
   options: {room: sensor.camera_programma}
   sizes: [2x2, 3x2]
+- tile: room
+  name: Casa
+  entity: climate.casa
+  options: {room: sensor.casa_programma}
+  sizes: [2x2, 3x2]
+- tile: room
+  name: Casa
+  entity: climate.casa
+  options: {room: sensor.casa_programma}
+  sizes: [1x1, 2x1, 1x2]
 # The option "Allow editing the bands" off: its card is the read-only list (tools/bench_flow.py opens it).
 - tile: room
   name: Sola lettura
@@ -117,6 +127,30 @@ tiles:
   sizes: [2x2]
 
 states:
+  climate.casa:
+    state: heat
+    attributes: {min_temp: 7, max_temp: 35, target_temp_step: 0.5, temperature: 18, current_temperature: 17.6, hvac_action: idle}
+  # The programme "Casa" on a Tuesday as it is in Home Assistant: heat with the preset away 00:00-15:00, home 15:00-22:30,
+  # away again 22:30-24:00, none of them with a temperature (-100): the bands differ in their preset only.
+  sensor.casa_programma:
+    state: Casa
+    attributes:
+      today_start: [0, 900, 1350]
+      today_end: [900, 1350, 1440]
+      today_mode: [1, 1, 1]
+      today_temp: [-100, -100, -100]
+      today_flags: [0, 0, 0]
+      today_preset: [away, home, away]
+      edit_info: "tue;3;r1;"
+      edit_seq: 0
+      edit_n: 3
+      slot_end_time: '{epoch+90m}'
+      next_mode: 1
+      next_temp: -100
+      next_start_time: '{epoch+90m}'
+      override_until_time: 0
+      status: ok
+      manual: false
   climate.soggiorno:
     state: heat
     attributes: {min_temp: 7, max_temp: 35, target_temp_step: 0.5, temperature: 21.5, current_temperature: 19.8, hvac_action: heating}
@@ -150,7 +184,7 @@ states:
       today_mode: [1, 1, 1, 1, 0]
       today_temp: [17, 21, 18, 21.5, -100]
       today_flags: [0, 0, 0, 0, 1]
-      today_preset: ["", "", "", "", ""]
+      today_preset: ["", comfort, eco, "", ""]
       edit_info: "mon;3;r1;"
       edit_seq: 0
       edit_n: 5

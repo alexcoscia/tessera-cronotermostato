@@ -2,6 +2,7 @@
 // Pure logic of the cronotermostato tile: no ESPHome, no LVGL, plain C++17, so it builds and runs on a computer
 // (tests/test_logic.cpp, tests/run.sh). The tile (cronotermostato.cpp) turns this logic into widgets, words and actions.
 #include <algorithm>
+#include <cctype>
 #include <climits>
 #include <cstddef>
 #include <cmath>
@@ -44,11 +45,15 @@ constexpr int MINUTES_PER_DAY = 1440;
 constexpr size_t MAX_BANDS = 16;         // bands drawn on the bar / listed in the card
 constexpr size_t MAX_LIST_ITEMS = 128;        // entries of the lists that are ever looked at
 constexpr double NO_TEMP = -100.0;       // `today_temp` value <= this means "no temperature"
+constexpr size_t MAX_PRESET_LEN = 40;    // the longest preset the integration accepts; a longer text is cut (display only)
+constexpr int TINT_COUNT = 4;            // tints of one mode: the same as the editor's bandTints (TINT_COUNT)
 
 // The parallel lists of the room sensor (`today_start`, `today_end` in wall-clock minutes 0-1440, `today_mode`,
 // `today_temp`, `today_auto`), as numbers.
+// `preset` (`today_preset`) may be empty or shorter: a band without an entry has no preset.
 struct DayLists {
   std::vector<double> start, end, mode, temp, autom;
+  std::vector<std::string> preset;
 };
 
 // One cleaned band: minutes inside 0-1440, start < end, bands sorted and not overlapping.
@@ -58,9 +63,25 @@ struct Band {
   bool has_temp = false;
   double temp = 0;
   bool autom = false;   // automatic "off" band filling a gap of the program
+  std::string preset;   // "" none; trimmed, at most MAX_PRESET_LEN bytes
+  int tint = 0;         // 0..TINT_COUNT-1: tells apart bands of the same mode that differ in value (TintBook)
 };
 
 namespace detail {
+// A preset as the tile keeps it: no blanks at the ends, at most MAX_PRESET_LEN bytes, never in the middle of a UTF-8 character.
+inline std::string clean_preset(const std::string &raw) {
+  const char *blank = " \t\r\n";
+  const size_t a = raw.find_first_not_of(blank);
+  if (a == std::string::npos) return "";
+  std::string s = raw.substr(a, raw.find_last_not_of(blank) - a + 1);
+  if (s.size() > MAX_PRESET_LEN) {
+    size_t n = MAX_PRESET_LEN;
+    while (n > 0 && ((unsigned char) s[n] & 0xC0) == 0x80) --n;
+    s.resize(n);
+  }
+  return s;
+}
+
 inline bool clean_minutes(double v, int &out) {
   if (!std::isfinite(v)) return false;
   out = (int) std::lround(std::min(std::max(v, -1.0), (double) MINUTES_PER_DAY + 1.0));
@@ -68,6 +89,35 @@ inline bool clean_minutes(double v, int &out) {
   return true;
 }
 }  // namespace detail
+
+// The tint of each band of a day, as the editor's bandTints: bands of the same mode that differ in value get another tint.
+// The value is the temperature, or the preset when there is no temperature (a band with neither has tint 0). The same
+// mode and value always give the same tint in a day; the first value met of a mode is tint 0, the next ones 1, 2, 3, then
+// it starts again (the label says the rest). Ask for the bands in the order of the day.
+class TintBook {
+ public:
+  int tint(Mode mode, bool has_temp, double temp, const std::string &preset) {
+    const std::string p = detail::clean_preset(preset);
+    if (!has_temp && p.empty()) return 0;
+    for (size_t i = 0; i < seen_.size(); ++i)
+      if (seen_[i].mode == mode && seen_[i].has_temp == has_temp && (has_temp ? seen_[i].temp == temp : seen_[i].preset == p))
+        return (int) (seen_[i].order % TINT_COUNT);
+    size_t order = 0;
+    for (const Seen &x : seen_) order += x.mode == mode ? 1 : 0;
+    seen_.push_back({mode, has_temp, temp, p, order});
+    return (int) (order % TINT_COUNT);
+  }
+
+ private:
+  struct Seen {
+    Mode mode;
+    bool has_temp;
+    double temp;
+    std::string preset;
+    size_t order;
+  };
+  std::vector<Seen> seen_;
+};
 
 // The bands of a day ready to draw. `truncated_before` / `truncated_after`: the day has more bands than MAX_BANDS and the
 // ones before / after the window were left out, so the bar has an unexplained empty part on that side (the tile may mark it).
@@ -79,7 +129,8 @@ struct Day {
 // Lists -> clean bands. Lists of different lengths: the shortest wins. A band with a value that is not a finite number
 // for its start or end is dropped; minutes outside 0-1440 are clamped; a band with start >= end (after clamping) is
 // dropped; bands are sorted by start (stable) and a band that overlaps an earlier one starts where that one ends;
-// adjacent bands with the same mode, temperature and auto flag become one. At most MAX_BANDS are returned: when there are more, the window that holds the band of `focus_minute` (or the next
+// adjacent bands with the same mode, temperature, preset and auto flag become one (bands that differ in temperature or preset stay apart, and
+// get another tint: TintBook, worked out on the whole day before any window is taken). At most MAX_BANDS are returned: when there are more, the window that holds the band of `focus_minute` (or the next
 // one, or the last) is kept; without a focus (< 0) the first ones.
 inline Day normalize_day(const DayLists &l, int focus_minute = -1) {
   size_t n = std::min({l.start.size(), l.end.size(), l.mode.size(), l.temp.size(), l.autom.size(), MAX_LIST_ITEMS});
@@ -93,6 +144,7 @@ inline Day normalize_day(const DayLists &l, int focus_minute = -1) {
     b.has_temp = std::isfinite(l.temp[i]) && l.temp[i] > NO_TEMP;
     b.temp = b.has_temp ? l.temp[i] : 0;
     b.autom = std::isfinite(l.autom[i]) && l.autom[i] != 0;
+    if (i < l.preset.size()) b.preset = detail::clean_preset(l.preset[i]);
     all.push_back(b);
   }
   std::stable_sort(all.begin(), all.end(), [](const Band &a, const Band &b) { return a.start < b.start; });
@@ -104,12 +156,14 @@ inline Day normalize_day(const DayLists &l, int focus_minute = -1) {
     if (b.start >= b.end) continue;
     covered = b.end;
     if (!out.empty() && out.back().end == b.start && out.back().mode == b.mode && out.back().has_temp == b.has_temp &&
-        out.back().temp == b.temp && out.back().autom == b.autom) {
+        out.back().temp == b.temp && out.back().autom == b.autom && out.back().preset == b.preset) {
       out.back().end = b.end;
       continue;
     }
     out.push_back(b);
   }
+  TintBook book;
+  for (Band &b : out) b.tint = book.tint(b.mode, b.has_temp, b.temp, b.preset);
   Day day;
   if (out.size() > MAX_BANDS) {
     size_t cur = 0;
@@ -141,6 +195,8 @@ struct Segment {
   bool has_temp = false;
   double temp = 0;
   bool autom = false;
+  std::string preset;
+  int tint = 0;
 };
 
 // Minute -> pixel boundary of a bar `width` pixels wide, rounded to the nearest pixel (the editor's `left` percent
@@ -171,6 +227,8 @@ inline std::vector<Segment> bar_segments(const std::vector<Band> &bands, int wid
     s.has_temp = b.has_temp;
     s.temp = b.temp;
     s.autom = b.autom;
+    s.preset = b.preset;
+    s.tint = b.tint;
     prev = s.x1;
     out.push_back(s);
   }
@@ -198,6 +256,120 @@ inline int now_marker(const Segment *segments, size_t count, int minute, int wid
 inline int now_marker(const std::vector<Segment> &segments, int minute, int width) {
   return now_marker(segments.data(), segments.size(), minute, width);
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// The bar: a clear joint between bands, a label of the value, the tint
+
+// What is drawn of a segment, in pixels: [x0, x1).
+struct Span {
+  int x0 = 0, x1 = 0;
+};
+
+// A gap of `gap` pixels where two segments touch, so the end of one band and the start of the next are always seen (the
+// editor leaves 2 px). The gap is taken half from each side; a segment keeps at least one pixel, so a side that has no
+// room gives the rest to the other one, and a gap between two one-pixel bands stays what it was (none). Segments that do
+// not touch (a gap of the program) and the ends of the day are left alone.
+inline std::vector<Span> separate(const Segment *segments, size_t count, int gap) {
+  std::vector<Span> out(count);
+  for (size_t i = 0; i < count; ++i) {
+    out[i].x0 = segments[i].x0;
+    out[i].x1 = segments[i].x1;
+  }
+  if (gap <= 0) return out;
+  for (size_t i = 0; i + 1 < count; ++i) {
+    if (segments[i].x1 != segments[i + 1].x0) continue;
+    const int room_l = out[i].x1 - out[i].x0 - 1, room_r = out[i + 1].x1 - out[i + 1].x0 - 1;
+    int cut_l = std::min(gap / 2, std::max(room_l, 0)), cut_r = std::min(gap - gap / 2, std::max(room_r, 0));
+    int rest = gap - cut_l - cut_r;
+    const int more_l = std::min(rest, std::max(room_l - cut_l, 0));
+    cut_l += more_l;
+    rest -= more_l;
+    cut_r += std::min(rest, std::max(room_r - cut_r, 0));
+    out[i].x1 -= cut_l;
+    out[i + 1].x0 += cut_r;
+  }
+  return out;
+}
+inline std::vector<Span> separate(const std::vector<Segment> &segments, int gap) { return separate(segments.data(), segments.size(), gap); }
+
+// How much a segment of `width` pixels can say, as the editor's segmentDetail with `unit` pixels for its CSS pixel:
+// nothing below 12 units, a sigla (two letters of the preset, or the temperature) below 34, the value from there on.
+enum class LabelLevel { NONE, SHORT, VALUE };
+inline LabelLevel label_level(int width, int unit) {
+  const int u = std::max(1, unit);
+  if (width < 12 * u) return LabelLevel::NONE;
+  if (width < 34 * u) return LabelLevel::SHORT;
+  return LabelLevel::VALUE;
+}
+
+// Two letters or digits of a preset, upper case ("away" -> "AW"); "" when it has none. A character that is not ASCII
+// (a letter of another alphabet) is taken whole.
+inline std::string preset_sigla(const std::string &preset) {
+  std::string out;
+  int taken = 0;
+  for (size_t i = 0; i < preset.size() && taken < 2;) {
+    const unsigned char c = (unsigned char) preset[i];
+    size_t len = 1;
+    if (c >= 0xF0) len = 4;
+    else if (c >= 0xE0) len = 3;
+    else if (c >= 0xC0) len = 2;
+    if (len > 1 || std::isalnum(c)) {
+      for (size_t k = 0; k < len && i + k < preset.size(); ++k) out += (len == 1 ? (char) std::toupper(c) : preset[i + k]);
+      ++taken;
+    }
+    i += len;
+  }
+  return out;
+}
+
+// The value of a row of the list in `max_w` pixels (`width_of(text)` measures a text): "21.5° away" when it fits, else
+// the temperature alone, else the preset (`cut`: it did not fit whole, the caller cuts it with dots). A row with neither is "".
+struct RowValue {
+  std::string text;
+  bool cut = false;
+};
+template <class Measure>
+inline RowValue row_value(const std::string &temp, const std::string &preset, int max_w, Measure width_of) {
+  RowValue v;
+  if (!temp.empty() && !preset.empty()) {
+    const std::string both = temp + " " + preset;
+    if (width_of(both) <= max_w) {
+      v.text = both;
+      return v;
+    }
+  }
+  if (!temp.empty()) {
+    v.text = temp;
+    v.cut = width_of(temp) > max_w;
+    return v;
+  }
+  v.text = preset;
+  v.cut = !preset.empty() && width_of(preset) > max_w;
+  return v;
+}
+
+// The tint: a share (of 255) of the ink colour mixed into the colour of the mode, so a tint is a lighter or darker shade
+// of the same colour in both looks (ink is dark in the light look and light in the dark one). tests/test_logic.cpp
+// checks that the text of ink or of the card, whichever reads better, has at least 4.5:1 on every tint of every mode in both looks.
+constexpr uint8_t TINT_SHARE[TINT_COUNT] = {0, 65, 125, 175};
+inline uint8_t tint_share(int tint) { return TINT_SHARE[std::min(std::max(tint, 0), TINT_COUNT - 1)]; }
+
+// WCAG relative luminance and contrast ratio of colours given as 0xRRGGBB.
+inline double relative_luminance(uint32_t rgb) {
+  double sum = 0;
+  const double weight[3] = {0.2126, 0.7152, 0.0722};
+  for (int i = 0; i < 3; ++i) {
+    const double v = (double) ((rgb >> (16 - 8 * i)) & 0xFF) / 255.0;
+    sum += weight[i] * (v <= 0.03928 ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4));
+  }
+  return sum;
+}
+inline double contrast_ratio(uint32_t a, uint32_t b) {
+  const double la = relative_luminance(a), lb = relative_luminance(b);
+  return (std::max(la, lb) + 0.05) / (std::min(la, lb) + 0.05);
+}
+// Of two neutral colours for the text on `fill`, the one that reads better: true for `first`.
+inline bool first_reads_better(uint32_t fill, uint32_t first, uint32_t second) { return contrast_ratio(fill, first) >= contrast_ratio(fill, second); }
 
 // ---------------------------------------------------------------------------------------------------------------
 // Hostile numbers, the dot of the thermostat
@@ -381,6 +553,15 @@ inline std::string format_temp(double value, double step, char separator = '.', 
   std::string s = buf;
   if (degree) s += "\xC2\xB0";
   return s;
+}
+
+// The sigla of a segment: the temperature without its degree sign, else the sigla of the preset.
+inline std::string segment_sigla(bool has_temp, double temp, const std::string &preset, double step, char separator) {
+  return has_temp ? format_temp(temp, step, separator, false) : preset_sigla(preset);
+}
+// The value of a segment: the temperature with its degree sign, else the preset as it is.
+inline std::string segment_value(bool has_temp, double temp, const std::string &preset, double step, char separator) {
+  return has_temp ? format_temp(temp, step, separator, true) : preset;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -783,6 +964,8 @@ struct Row {
   bool has_temp = false;
   double temp = 0;
   bool autom = false;
+  std::string preset;
+  int tint = 0;
   bool current = false;   // the band of the local time: start <= now < end
 };
 
@@ -798,6 +981,8 @@ inline std::vector<Row> card_rows(const DayLists &l, int now_minute) {
     r.has_temp = b.has_temp;
     r.temp = b.temp;
     r.autom = b.autom;
+    r.preset = b.preset;
+    r.tint = b.tint;
     r.current = b.start <= now && now < b.end;
     rows.push_back(r);
   }

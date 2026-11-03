@@ -1716,6 +1716,412 @@ TEST(resume_gate_handles_the_millisecond_wrap) {
   CHECK(gate.press(near_wrap + 5000u));
 }
 
+
+// ---------------------------------------------------------------- 13. presets, tints, joints, labels (plan 4, version 0.2.2)
+
+static std::vector<Band> bands_with_presets(const V &s, const V &e, const V &t, const std::vector<std::string> &presets, int mode = 1) {
+  DayLists l;
+  l.start = s;
+  l.end = e;
+  for (size_t i = 0; i < s.size(); ++i) {
+    l.mode.push_back(mode);
+    l.autom.push_back(0);
+  }
+  l.temp = t;
+  l.preset = presets;
+  return normalize_bands(l);
+}
+
+TEST(adjacent_bands_with_other_preset_stay_apart) {
+  // "Casa" on a Tuesday: heat away 00:00-15:00, home 15:00-22:30, away 22:30-24:00, none with a temperature.
+  auto b = bands_with_presets({0, 900, 1350}, {900, 1350, 1440}, {-100, -100, -100}, {"away", "home", "away"});
+  CHECK(b.size() == 3);
+  CHECK(b[0].preset == "away" && b[1].preset == "home" && b[2].preset == "away");
+  CHECK(b[0].end == 900 && b[1].start == 900 && b[1].end == 1350 && b[2].start == 1350);
+  CHECK(b[0].tint == 0 && b[1].tint == 1 && b[2].tint == 0);
+  // the same preset in two adjacent bands is one band, as before
+  b = bands_with_presets({0, 600}, {600, 1440}, {-100, -100}, {"eco", "eco"});
+  CHECK(b.size() == 1 && b[0].start == 0 && b[0].end == 1440 && b[0].preset == "eco");
+  // with and without a preset are two bands; the blanks around a preset do not count
+  b = bands_with_presets({0, 600}, {600, 1440}, {-100, -100}, {"eco", ""});
+  CHECK(b.size() == 2);
+  b = bands_with_presets({0, 600}, {600, 1440}, {-100, -100}, {" eco\t", "eco"});
+  CHECK(b.size() == 1 && b[0].preset == "eco");
+  // a list of presets shorter than the others: the bands past it have none
+  b = bands_with_presets({0, 600}, {600, 1440}, {-100, -100}, {"eco"});
+  CHECK(b.size() == 2 && b[1].preset.empty());
+  // the same temperature and the same preset merge; the same temperature with another preset does not
+  b = bands_with_presets({0, 600}, {600, 1440}, {20, 20}, {"eco", "comfort"});
+  CHECK(b.size() == 2);
+  b = bands_with_presets({0, 600}, {600, 1440}, {20, 20}, {"eco", "eco"});
+  CHECK(b.size() == 1);
+  // another temperature with the same preset does not merge (it never did)
+  b = bands_with_presets({0, 600}, {600, 1440}, {20, 21}, {"eco", "eco"});
+  CHECK(b.size() == 2);
+}
+
+TEST(preset_is_clean_and_short) {
+  CHECK_STR(detail::clean_preset("  away \n"), "away");
+  CHECK_STR(detail::clean_preset(" \t "), "");
+  CHECK_STR(detail::clean_preset(""), "");
+  const std::string long40(40, 'a'), long41(41, 'a');
+  CHECK_STR(detail::clean_preset(long40), long40);
+  CHECK_STR(detail::clean_preset(long41), long40);   // cut at 40 bytes
+  // never in the middle of a character: 39 letters and a two-byte one end at byte 41, so the character goes
+  const std::string accent = std::string(39, 'a') + "\xC3\xA9" + "z";
+  CHECK_STR(detail::clean_preset(accent), std::string(39, 'a'));
+  CHECK_STR(detail::clean_preset(std::string(38, 'a') + "\xC3\xA9"), std::string(38, 'a') + "\xC3\xA9");
+}
+
+struct TintBand {
+  int mode;
+  bool has_temp;
+  double temp;
+  const char *preset;
+  int tint;
+};
+struct TintCase {
+  const char *name;
+  std::vector<TintBand> bands;
+};
+static const std::vector<TintCase> &tint_cases() {
+  static const std::vector<TintCase> c = {
+#include "tints.inc"
+  };
+  return c;
+}
+
+TEST(tints_parity_with_editor_band_tints) {
+  CHECK(tint_cases().size() >= 20);
+  for (auto &c : tint_cases()) {
+    // one minute between bands: nothing merges, so band i of the day is band i of the case
+    DayLists l;
+    for (size_t i = 0; i < c.bands.size(); ++i) {
+      l.start.push_back((double) (i * 30));
+      l.end.push_back((double) (i * 30 + 20));
+      l.mode.push_back(c.bands[i].mode);
+      l.temp.push_back(c.bands[i].has_temp ? c.bands[i].temp : NO_TEMP);
+      l.autom.push_back(0);
+      l.preset.push_back(c.bands[i].preset);
+    }
+    const auto b = normalize_bands(l);
+    CHECK(b.size() == c.bands.size());
+    if (b.size() != c.bands.size()) continue;
+    // the same through TintBook asked one band after the other
+    TintBook book;
+    for (size_t i = 0; i < b.size(); ++i) {
+      if (b[i].tint != c.bands[i].tint) std::printf("  case \"%s\", band %zu: %d, editor %d\n", c.name, i, b[i].tint, c.bands[i].tint);
+      CHECK(b[i].tint == c.bands[i].tint);
+      CHECK(book.tint(mode_from_code(c.bands[i].mode), c.bands[i].has_temp, c.bands[i].temp, c.bands[i].preset) == c.bands[i].tint);
+    }
+  }
+}
+
+TEST(tint_book_rules) {
+  TintBook t;
+  CHECK(t.tint(Mode::HEAT, true, 20, "") == 0);
+  CHECK(t.tint(Mode::HEAT, true, 21, "") == 1);
+  CHECK(t.tint(Mode::HEAT, true, 20, "") == 0);           // the same value, the same tint
+  CHECK(t.tint(Mode::COOL, true, 20, "") == 0);           // modes count apart
+  CHECK(t.tint(Mode::COOL, true, 26, "") == 1);
+  CHECK(t.tint(Mode::HEAT, true, 22, "") == 2);
+  CHECK(t.tint(Mode::HEAT, true, 23, "") == 3);
+  CHECK(t.tint(Mode::HEAT, true, 24, "") == 0);           // the fifth value goes round
+  CHECK(t.tint(Mode::HEAT, true, 25, "") == 1);
+  CHECK(t.tint(Mode::HEAT, true, 24, "") == 0);           // and stays what it was
+  TintBook u;
+  CHECK(u.tint(Mode::HEAT, false, 0, "away") == 0);       // no temperature: the preset is the value
+  CHECK(u.tint(Mode::HEAT, false, 0, "home") == 1);
+  CHECK(u.tint(Mode::HEAT, false, 0, " away ") == 0);     // blanks do not count
+  CHECK(u.tint(Mode::HEAT, true, 20, "away") == 2);       // a temperature is a value of its own; the preset beside it does not count
+  CHECK(u.tint(Mode::HEAT, true, 20, "home") == 2);
+  CHECK(u.tint(Mode::HEAT, false, 0, "") == 0);           // neither: tint 0, and it takes no place
+  CHECK(u.tint(Mode::HEAT, false, 0, "   ") == 0);
+  CHECK(u.tint(Mode::HEAT, true, 21, "") == 3);
+  CHECK(u.tint(Mode::OFF, false, 0, "") == 0);
+  // a temperature of 20 is not the preset "20"
+  TintBook w;
+  CHECK(w.tint(Mode::HEAT, true, 20, "") == 0);
+  CHECK(w.tint(Mode::HEAT, false, 0, "20") == 1);
+}
+
+TEST(tints_are_of_the_whole_day_before_a_window_is_taken) {
+  // 20 bands of 20 minutes with a minute between them, each with its own temperature: more than the 16 the bar keeps
+  DayLists l;
+  for (int i = 0; i < 20; ++i) {
+    l.start.push_back(i * 30);
+    l.end.push_back(i * 30 + 20);
+    l.mode.push_back(1);
+    l.temp.push_back(10 + i);
+    l.autom.push_back(0);
+  }
+  const Day last = normalize_day(l, 20 * 30 - 5);
+  CHECK(last.bands.size() == MAX_BANDS && last.truncated_before);
+  for (size_t i = 0; i < last.bands.size(); ++i) CHECK(last.bands[i].tint == (int) ((i + 4) % TINT_COUNT));   // band 4.. of the day
+  const Day first = normalize_day(l, 0);
+  for (size_t i = 0; i < first.bands.size(); ++i) CHECK(first.bands[i].tint == (int) (i % TINT_COUNT));
+}
+
+TEST(segments_and_rows_carry_preset_and_tint) {
+  auto b = bands_with_presets({0, 900, 1350}, {900, 1350, 1440}, {-100, -100, -100}, {"away", "home", "away"});
+  auto s = bar_segments(b, 300);
+  CHECK(s.size() == 3);
+  CHECK(s[0].preset == "away" && s[1].preset == "home" && s[2].preset == "away");
+  CHECK(s[0].tint == 0 && s[1].tint == 1 && s[2].tint == 0);
+  DayLists l;
+  l.start = {0, 900, 1350};
+  l.end = {900, 1350, 1440};
+  l.mode = {1, 1, 1};
+  l.temp = {-100, -100, -100};
+  l.autom = {0, 0, 0};
+  l.preset = {"away", "home", "away"};
+  auto rows = card_rows(l, 1000);
+  CHECK(rows.size() == 3);
+  CHECK(rows[1].preset == "home" && rows[1].tint == 1 && rows[1].current);
+  CHECK(rows[0].tint == 0 && rows[2].tint == 0 && rows[2].preset == "away");
+}
+
+static std::vector<Segment> touching(const std::vector<std::pair<int, int>> &xs) {
+  std::vector<Segment> v;
+  for (auto &x : xs) {
+    Segment s;
+    s.x0 = x.first;
+    s.x1 = x.second;
+    v.push_back(s);
+  }
+  return v;
+}
+
+TEST(separate_leaves_a_clear_joint) {
+  const auto seg = touching({{0, 50}, {50, 120}, {120, 150}});
+  auto sp = separate(seg, 2);
+  CHECK(sp.size() == 3);
+  CHECK(sp[0].x0 == 0 && sp[0].x1 == 49);        // the day's ends are left alone
+  CHECK(sp[1].x0 == 51 && sp[1].x1 == 119);      // one pixel off each side of each joint
+  CHECK(sp[2].x0 == 121 && sp[2].x1 == 150);
+  CHECK(sp[1].x0 - sp[0].x1 == 2 && sp[2].x0 - sp[1].x1 == 2);
+  sp = separate(seg, 3);                          // an odd gap: the left side gives the smaller half
+  CHECK(sp[0].x1 == 49 && sp[1].x0 == 52 && sp[1].x1 == 119 && sp[2].x0 == 122);
+  sp = separate(seg, 0);                          // no gap: as drawn
+  CHECK(sp[0].x1 == 50 && sp[1].x0 == 50 && sp[2].x0 == 120);
+  sp = separate(seg, -4);
+  CHECK(sp[0].x1 == 50 && sp[1].x0 == 50);
+  CHECK(separate(std::vector<Segment>(), 2).empty());
+  sp = separate(touching({{0, 150}}), 2);          // one band: nothing to separate
+  CHECK(sp[0].x0 == 0 && sp[0].x1 == 150);
+}
+
+TEST(separate_leaves_gaps_of_the_program_alone) {
+  const auto seg = touching({{0, 40}, {60, 100}, {100, 150}});   // 40-60 is a gap between bands
+  auto sp = separate(seg, 2);
+  CHECK(sp[0].x1 == 40 && sp[1].x0 == 60);
+  CHECK(sp[1].x1 == 99 && sp[2].x0 == 101);
+}
+
+TEST(separate_keeps_one_pixel_per_band) {
+  // narrow bands: never less than one pixel, and the joint is as wide as the room allows
+  auto sp = separate(touching({{0, 1}, {1, 2}, {2, 3}}), 2);
+  for (auto &x : sp) CHECK(x.x1 - x.x0 == 1);
+  CHECK(sp[0].x0 == 0 && sp[1].x0 == 1 && sp[2].x1 == 3);
+  sp = separate(touching({{0, 1}, {1, 20}}), 2);   // the narrow side has no room: the wide side gives both pixels
+  CHECK(sp[0].x0 == 0 && sp[0].x1 == 1 && sp[1].x0 == 3 && sp[1].x1 == 20);
+  sp = separate(touching({{0, 20}, {20, 21}}), 2);
+  CHECK(sp[0].x1 == 18 && sp[1].x0 == 20 && sp[1].x1 == 21);
+  sp = separate(touching({{0, 2}, {2, 4}}), 2);   // two pixels each: one pixel each is left
+  CHECK(sp[0].x1 - sp[0].x0 == 1 && sp[1].x1 - sp[1].x0 == 1 && sp[1].x0 == 3 && sp[0].x1 == 1);
+}
+
+TEST(separate_invariants_on_every_bar) {
+  for (int width : {20, 151, 302, 480, 1000}) {
+    for (auto &c : js_cases()) {
+      V s, e, m, t, a;
+      for (auto &g : c.segs) {
+        s.push_back(g.start);
+        e.push_back(g.end);
+        m.push_back(1);
+        t.push_back(20 + (int) t.size());
+        a.push_back(0);
+      }
+      if (s.empty() || (size_t) width < s.size()) continue;
+      const auto segs = bar_segments(bands_of(s, e, m, t, a), width);
+      for (int gap : {0, 1, 2, 3, 5}) {
+        const auto sp = separate(segs, gap);
+        CHECK(sp.size() == segs.size());
+        for (size_t i = 0; i < sp.size() && i < segs.size(); ++i) {
+          CHECK(sp[i].x1 - sp[i].x0 >= 1);                                   // a band is never lost
+          CHECK(sp[i].x0 >= segs[i].x0 && sp[i].x1 <= segs[i].x1);           // only ever smaller
+          if (i > 0) CHECK(sp[i].x0 >= sp[i - 1].x1);                        // never over a neighbour
+          if (i > 0 && segs[i].x0 == segs[i - 1].x1) {
+            const int room = (segs[i].x1 - segs[i].x0 - 1) + (segs[i - 1].x1 - segs[i - 1].x0 - 1);
+            CHECK(sp[i].x0 - sp[i - 1].x1 >= std::min(gap, std::max(room, 0)));   // the joint is the gap, or what the bands could give
+          }
+        }
+        CHECK(sp.empty() || (sp.front().x0 >= 0 && sp.back().x1 <= width));
+      }
+    }
+  }
+}
+
+struct LevelCase {
+  int width, level;
+};
+struct SiglaCase {
+  const char *preset, *sigla;
+};
+
+TEST(label_level_parity_with_editor_segment_detail) {
+  static const std::vector<LevelCase> levels = {
+#include "labels.inc"
+  };
+  CHECK(levels.size() >= 12);
+  for (auto &c : levels) {
+    const LabelLevel got = label_level(c.width, 1);
+    const int g = got == LabelLevel::NONE ? 0 : got == LabelLevel::SHORT ? 1 : 2;
+    if (g != c.level) std::printf("  width %d: %d, editor %d\n", c.width, g, c.level);
+    CHECK(g == c.level);
+  }
+  // a unit of 2 pixels doubles every threshold; a unit of 0 or below is 1
+  CHECK(label_level(23, 2) == LabelLevel::NONE && label_level(24, 2) == LabelLevel::SHORT);
+  CHECK(label_level(67, 2) == LabelLevel::SHORT && label_level(68, 2) == LabelLevel::VALUE);
+  CHECK(label_level(12, 0) == LabelLevel::SHORT && label_level(11, -3) == LabelLevel::NONE);
+}
+
+TEST(preset_sigla_parity_with_editor_preset_sigla) {
+  static const std::vector<SiglaCase> siglas = {
+#include "siglas.inc"
+  };
+  CHECK(siglas.size() >= 10);
+  for (auto &c : siglas) {
+    CHECK_STR(preset_sigla(c.preset), c.sigla);
+  }
+  CHECK_STR(preset_sigla("\xC3\xA9" "co"), "\xC3\xA9" "C");             // a letter of another alphabet is taken whole (its case is not changed)
+  CHECK_STR(preset_sigla("\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E"), "\xE6\x97\xA5\xE6\x9C\xAC");
+  CHECK_STR(preset_sigla(std::string("a") + "\xC3"), "A\xC3");           // a cut character does not run past the text
+}
+
+TEST(segment_sigla_and_value) {
+  CHECK_STR(segment_sigla(true, 21.5, "eco", 0.5, '.'), "21.5");
+  CHECK_STR(segment_value(true, 21.5, "eco", 0.5, '.'), "21.5\xC2\xB0");
+  CHECK_STR(segment_sigla(true, 21.5, "", 0.5, ','), "21,5");
+  CHECK_STR(segment_value(true, 22, "", 1, '.'), "22\xC2\xB0");
+  CHECK_STR(segment_sigla(false, 0, "away", 0.5, '.'), "AW");
+  CHECK_STR(segment_value(false, 0, "away", 0.5, '.'), "away");
+  CHECK_STR(segment_sigla(false, 0, "", 0.5, '.'), "");
+  CHECK_STR(segment_value(false, 0, "", 0.5, '.'), "");
+}
+
+TEST(row_value_ladder) {
+  auto w = [](const std::string &t) { return (int) t.size() * 8; };
+  auto v = row_value("21.5\xC2\xB0", "away", 200, w);          // 11 bytes with the degree sign: "21.5° away" is 10 chars + the sign
+  CHECK_STR(v.text, "21.5\xC2\xB0 away");
+  CHECK(!v.cut);
+  v = row_value("21.5\xC2\xB0", "away", 8 * 11, w);             // "21.5° away" = 11 bytes = 88: fits exactly
+  CHECK_STR(v.text, "21.5\xC2\xB0 away");
+  v = row_value("21.5\xC2\xB0", "away", 8 * 11 - 1, w);         // one pixel short: the temperature alone
+  CHECK_STR(v.text, "21.5\xC2\xB0");
+  CHECK(!v.cut);
+  v = row_value("21.5\xC2\xB0", "", 200, w);
+  CHECK_STR(v.text, "21.5\xC2\xB0");
+  v = row_value("21.5\xC2\xB0", "away", 10, w);                 // not even the temperature: the caller cuts it
+  CHECK_STR(v.text, "21.5\xC2\xB0");
+  CHECK(v.cut);
+  v = row_value("", "comfort", 7 * 8, w);
+  CHECK_STR(v.text, "comfort");
+  CHECK(!v.cut);
+  v = row_value("", "comfort", 7 * 8 - 1, w);
+  CHECK_STR(v.text, "comfort");
+  CHECK(v.cut);
+  v = row_value("", "", 100, w);
+  CHECK_STR(v.text, "");
+  CHECK(!v.cut);
+  v = row_value("", "", 0, w);
+  CHECK(!v.cut && v.text.empty());
+}
+
+// The colours of the look, copied from the firmware's theme table (components/smart_display/theme.h, light and dark): the
+// colour of each mode as the tile takes it (Home Assistant's amber, the look's accent, the grey role SUBTLE), ink and the card.
+struct Look {
+  const char *name;
+  uint32_t heat, cool, off, ink, card;
+};
+static const Look LOOKS[2] = {{"light", 0xFFC107, 0x009FE3, 0x6B6B6B, 0x1B1B1B, 0xFFFFFF},
+                              {"dark", 0xFFC107, 0x0A93D2, 0x8A8A8A, 0xDADADA, 0x1A1A1A}};
+// lv_color_mix(first, second, amount) as LVGL 9 does it
+static uint32_t mix_rgb(uint32_t first, uint32_t second, uint8_t amount) {
+  uint32_t out = 0;
+  for (int shift = 16; shift >= 0; shift -= 8) {
+    const uint32_t a = first >> shift & 0xFF, b = second >> shift & 0xFF;
+    out |= (((a * amount + b * (255 - amount)) * 0x8081U) >> 23) << shift;
+  }
+  return out;
+}
+static uint32_t tint_fill(uint32_t base, uint32_t ink, int tint) {
+  const uint8_t share = tint_share(tint);
+  return share ? mix_rgb(ink, base, share) : base;
+}
+static int channel_distance(uint32_t a, uint32_t b) {
+  int d = 0;
+  for (int shift = 16; shift >= 0; shift -= 8) d += std::abs((int) (a >> shift & 0xFF) - (int) (b >> shift & 0xFF));
+  return d;
+}
+
+TEST(contrast_helpers) {
+  CHECK(std::fabs(relative_luminance(0x000000) - 0.0) < 1e-9);
+  CHECK(std::fabs(relative_luminance(0xFFFFFF) - 1.0) < 1e-9);
+  CHECK(std::fabs(contrast_ratio(0xFFFFFF, 0x000000) - 21.0) < 1e-9);
+  CHECK(std::fabs(contrast_ratio(0x000000, 0xFFFFFF) - 21.0) < 1e-9);   // either order
+  CHECK(std::fabs(contrast_ratio(0x777777, 0x777777) - 1.0) < 1e-9);
+  CHECK(contrast_ratio(0x767676, 0xFFFFFF) > 4.5 && contrast_ratio(0x777777, 0xFFFFFF) < 4.6);   // the known 4.5 grey
+  // the weights of the channels (WCAG 2): pure red, green and blue, and two colours of the tile checked against known ratios
+  CHECK(std::fabs(relative_luminance(0xFF0000) - 0.2126) < 1e-6 && std::fabs(relative_luminance(0x00FF00) - 0.7152) < 1e-6 &&
+        std::fabs(relative_luminance(0x0000FF) - 0.0722) < 1e-6);
+  CHECK(std::fabs(contrast_ratio(0xFFC107, 0x1B1B1B) - 10.5668) < 1e-3);
+  CHECK(std::fabs(contrast_ratio(0x009FE3, 0xFFFFFF) - 2.9709) < 1e-3);
+  CHECK(first_reads_better(0xFFC107, 0x1B1B1B, 0xFFFFFF));
+  CHECK(!first_reads_better(0x101010, 0x1B1B1B, 0xFFFFFF));
+  CHECK(first_reads_better(0x808080, 0x808080, 0x808080));   // a tie goes to the first
+}
+
+TEST(tint_shares_grow_and_are_clamped) {
+  CHECK(tint_share(0) == 0);
+  for (int i = 1; i < TINT_COUNT; ++i) CHECK(tint_share(i) > tint_share(i - 1));
+  CHECK(tint_share(-1) == tint_share(0));
+  CHECK(tint_share(TINT_COUNT + 7) == tint_share(TINT_COUNT - 1));
+}
+
+TEST(tints_are_readable_and_apart_in_both_looks) {
+  for (const Look &look : LOOKS) {
+    for (uint32_t base : {look.heat, look.cool, look.off}) {
+      uint32_t fills[TINT_COUNT];
+      for (int t = 0; t < TINT_COUNT; ++t) {
+        fills[t] = tint_fill(base, look.ink, t);
+        // the text on a fill is ink or the card's ground, whichever reads better: 4.5 to 1 on every tint
+        const double best = std::max(contrast_ratio(fills[t], look.ink), contrast_ratio(fills[t], look.card));
+        if (best < 4.5) std::printf("  %s %06X tint %d: %.2f\n", look.name, (unsigned) base, t, best);
+        CHECK(best >= 4.5);
+      }
+      CHECK(fills[0] == base);                                   // tint 0 is the plain colour of the mode
+      for (int a = 0; a < TINT_COUNT; ++a)
+        for (int b = a + 1; b < TINT_COUNT; ++b) CHECK(channel_distance(fills[a], fills[b]) >= 40);   // the tints can be told apart
+    }
+  }
+}
+
+TEST(tinted_fill_is_a_shade_of_its_mode) {
+  // a tint moves the colour towards ink and never away from its hue: in the light look it only gets darker, in the dark look lighter
+  const Look &light = LOOKS[0], &dark = LOOKS[1];
+  for (int t = 1; t < TINT_COUNT; ++t) {
+    CHECK(relative_luminance(tint_fill(light.heat, light.ink, t)) < relative_luminance(tint_fill(light.heat, light.ink, t - 1)));
+    CHECK(relative_luminance(tint_fill(dark.heat, dark.ink, t)) > relative_luminance(tint_fill(dark.heat, dark.ink, t - 1)));
+  }
+  // heat stays warmer than cool, cool bluer: the red channel of heat stays above its blue one on every tint of the light look
+  for (int t = 0; t < TINT_COUNT; ++t) {
+    const uint32_t h = tint_fill(light.heat, light.ink, t), c = tint_fill(light.cool, light.ink, t);
+    CHECK((h >> 16 & 0xFF) > (h & 0xFF));
+    CHECK((c & 0xFF) > (c >> 16 & 0xFF));
+  }
+}
+
 int main() {
   for (auto &t : tests()) {
     g_test = t.name;

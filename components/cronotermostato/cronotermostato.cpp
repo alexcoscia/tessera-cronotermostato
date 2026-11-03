@@ -39,14 +39,16 @@ static double number(JsonVariantConst v, double fallback) {
 // Only as many entries as the logic ever looks at, and the vectors live for the length of the call.
 static DayLists read_lists(JsonObjectConst r) {
   DayLists l;
-  JsonArrayConst s = r["today_start"], e = r["today_end"], m = r["today_mode"], t = r["today_temp"], a = r["today_flags"];   // flags: bit 1 = automatic band
+  JsonArrayConst s = r["today_start"], e = r["today_end"], m = r["today_mode"], t = r["today_temp"], a = r["today_flags"], pr = r["today_preset"];   // flags: bit 1 = automatic band
   const size_t n = std::min({s.size(), e.size(), m.size(), t.size(), MAX_LIST_ITEMS});
   l.start.reserve(n);
   l.end.reserve(n);
   l.mode.reserve(n);
   l.temp.reserve(n);
   l.autom.reserve(n);
+  l.preset.reserve(std::min(pr.size(), n));
   for (size_t i = 0; i < n; ++i) {
+    if (i < pr.size()) l.preset.emplace_back(pr[i] | "");
     l.start.push_back(number(s[i], NAN));
     l.end.push_back(number(e[i], NAN));
     l.mode.push_back(number(m[i], 0));
@@ -89,8 +91,26 @@ static Tone tone_for(Mode mode) {
   }
 }
 
-// A block in the colour of a mode: heat is Home Assistant's amber, cool the look's blue, off the grey role SUBTLE.
-static void paint_mode(lv_obj_t *block, Mode mode) { ui::set_fill(block, tone_for(mode), theme::SUBTLE); }
+// The colour of a band: the colour of its mode (heat is Home Assistant's amber, cool the look's blue, off the grey role
+// SUBTLE), with a share of the ink mixed in for the second, third and fourth value of the same mode in the day (a tint is a
+// shade of the mode's colour in both looks). The text on it is neutral: see text_on().
+static lv_color_t band_fill(Mode mode, int tint) {
+  const lv_color_t base = ui::tone_color(tone_for(mode), theme::SUBTLE);
+  const uint8_t share = tint_share(tint);
+  return share ? lv_color_mix(ui::color(theme::INK), base, share) : base;
+}
+static uint32_t rgb_of(lv_color_t c) { return lv_color_to_u32(c) & ((1u << 24) - 1); }
+// A block in the colour of a band; returns that colour (to choose the text on it).
+static lv_color_t paint_band(lv_obj_t *block, Mode mode, int tint) {
+  const lv_color_t c = band_fill(mode, tint);
+  lv_obj_set_style_bg_color(block, c, 0);
+  return c;
+}
+// Of the two neutral roles, ink and the card's ground, the one that reads better on this fill (the roles swap their light
+// and dark values, so one of them is always dark and the other light).
+static theme::Role text_on(lv_color_t fill) {
+  return first_reads_better(rgb_of(fill), rgb_of(ui::color(theme::INK)), rgb_of(ui::color(theme::CARD))) ? theme::INK : theme::CARD;
+}
 
 static const char *mode_word(const tessera::Plugin *plugin, Mode mode, bool shortly) {
   switch (mode) {
@@ -113,6 +133,26 @@ static int minute_of(uint32_t epoch) {
   if (!epoch) return -1;
   const tessera::LocalTime lt = tessera::local_time(epoch);
   return lt.hour * 60 + lt.minute;
+}
+
+// A cut that does not split a UTF-8 character and ends in dots, for a text the room cannot hold (a name a person chose).
+static std::string fit_cut(std::string s, int max_w, Font font) {
+  if (ui::text_width(s, font) <= max_w) return s;
+  const char *dots = ui::covers("\xE2\x80\xA6", font) ? "\xE2\x80\xA6" : "..";
+  while (!s.empty()) {
+    size_t n = s.size() - 1;
+    while (n > 0 && ((unsigned char) s[n] & 0xC0) == 0x80) --n;
+    s.resize(n);
+    if (ui::text_width(s + dots, font) <= max_w) return s + dots;
+  }
+  return "";
+}
+
+// How many characters (not bytes) a UTF-8 text has.
+static int glyphs(const std::string &s) {
+  int n = 0;
+  for (unsigned char c : s) n += (c & 0xC0) != 0x80;
+  return n;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -163,7 +203,26 @@ class RoomTile : public tessera::Tile {
     li.tick_h = tick_h_;
     li.gap = gap;
     li.has_name = c.name && *c.name;
-    const LayoutPlan plan = choose_layout(li);
+    LayoutPlan plan = choose_layout(li);
+    // Labels of the value on the bars (more than one cell, the full look only): the bar grows to the height of a line of
+    // text when the tile then still has the same look, else it stays thin and shows colours and joints only.
+    labels_ = false;
+    if ((int) c.columns * (int) c.rows > 1 && plan.family == Family::FULL && plan.fits) {
+      const int thick = body_h + 2 * ui::px(2);
+      if (bar_h_ >= thick) {
+        labels_ = true;
+      } else {
+        LayoutInput taller = li;
+        taller.tick_h = thick + 2 * ui::px(2);
+        const LayoutPlan other = choose_layout(taller);
+        if (other.fits && other.family == plan.family && other.rank == plan.rank) {
+          plan = other;
+          bar_h_ = thick;
+          tick_h_ = taller.tick_h;
+          labels_ = true;
+        }
+      }
+    }
     family_ = plan.family;
     has_keys_ = plan.keys;
     has_bar_ = plan.bar;
@@ -239,8 +298,14 @@ class RoomTile : public tessera::Tile {
     show(track_, has_bar_);
     for (int i = 0; i < MAX_SEGMENTS; ++i) {
       seg_[i] = ui::block(track_, theme::SUBTLE);
-      lv_obj_set_style_radius(seg_[i], 0, 0);   // square joints: neighbours touch without a notch
+      lv_obj_set_style_radius(seg_[i], 0, 0);   // square ends; the joint between two bands is the track showing through (separate)
+      lv_obj_set_style_pad_all(seg_[i], 0, 0);
       lv_obj_add_flag(seg_[i], LV_OBJ_FLAG_HIDDEN);
+      if (labels_) {
+        seg_label_[i] = ui::label(seg_[i], Font::BODY, theme::INK);
+        lv_obj_set_style_text_align(seg_label_[i], LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_add_flag(seg_label_[i], LV_OBJ_FLAG_HIDDEN);
+      }
     }
     tick_ = ui::block(c.parent, theme::INK);
     lv_obj_set_size(tick_, tick_w_ + 2 * tick_edge_, tick_h_);
@@ -510,6 +575,7 @@ class RoomTile : public tessera::Tile {
 
     // The bar: a band is a block inside the track; with no bar to show the track stays empty (switched off).
     const bool bar = bar_visible_ && alive;
+    const std::vector<Span> spans = separate(seg_data_, (size_t) std::min(nseg_, MAX_SEGMENTS), std::max(2, ui::px(2)));
     for (int i = 0; i < MAX_SEGMENTS; ++i) {
       if (!bar || i >= nseg_) {
         show(seg_[i], false);
@@ -517,13 +583,73 @@ class RoomTile : public tessera::Tile {
       }
       const Segment &s = seg_data_[i];
       show(seg_[i], true);
-      lv_obj_set_pos(seg_[i], s.x0, 0);
-      lv_obj_set_size(seg_[i], std::max(1, s.x1 - s.x0), bar_h_);
-      paint_mode(seg_[i], s.mode);
+      lv_obj_set_pos(seg_[i], spans[i].x0, 0);
+      lv_obj_set_size(seg_[i], std::max(1, spans[i].x1 - spans[i].x0), bar_h_);
+      const lv_color_t fill = paint_band(seg_[i], s.mode, s.tint);
+      spans_x0_[i] = spans[i].x0;
+      if (labels_) paint_label(i, s, std::max(1, spans[i].x1 - spans[i].x0), fill);
     }
     ui::set_fill(track_, Tone::NORMAL, theme::TRACK);
     ui::set_fill(tick_, Tone::NORMAL, theme::INK);
     lv_obj_set_style_border_color(tick_, ui::color(theme::CARD), 0);
+  }
+
+  // The value on a segment, by the width it has (label_level: nothing, a sigla, the value): the temperature, or the preset
+  // when the band has none. Whole if it fits, else cut with dots (two letters at least), else the sigla, else nothing.
+  void paint_label(int i, const Segment &s, int width, lv_color_t fill) {
+    lv_obj_t *l = seg_label_[i];
+    if (!l) return;
+    const bool value = s.mode != Mode::OFF && (s.has_temp || !s.preset.empty());
+    const LabelLevel level = value ? label_level(width, ui::px(1)) : LabelLevel::NONE;
+    const int room = width - 2 * ui::px(1);
+    std::string text;
+    if (level == LabelLevel::VALUE) {
+      const std::string whole = segment_value(s.has_temp, s.temp, s.preset, step_, decimal_);
+      const std::string sigla = segment_sigla(s.has_temp, s.temp, s.preset, step_, decimal_);
+      if (ui::text_width(whole, Font::BODY) <= room) {
+        text = whole;
+      } else {
+        const std::string cut = fit_cut(whole, room, Font::BODY);
+        text = glyphs(cut) >= 3 ? cut : "";
+        if (text.empty() && ui::text_width(sigla, Font::BODY) <= room) text = sigla;
+      }
+    } else if (level == LabelLevel::SHORT) {
+      const std::string sigla = segment_sigla(s.has_temp, s.temp, s.preset, step_, decimal_);
+      if (ui::text_width(sigla, Font::BODY) <= room) text = sigla;
+    }
+    label_w_[i] = text.empty() ? 0 : ui::text_width(text, Font::BODY);
+    label_seg_[i] = width;
+    if (text.empty()) {
+      show(l, false);
+      return;
+    }
+    lv_obj_set_width(l, label_w_[i] + ui::px(2));
+    lv_obj_set_y(l, std::max(0, (bar_h_ - ui::line_height(Font::BODY)) / 2));
+    ui::set_text(l, text);
+    ui::set_color(l, text_on(fill));
+    place_label(i, spans_x0_[i]);
+  }
+
+  // The label in the middle of its segment, or, when the "now" tick would stand on it, in the larger free side of the
+  // segment, or none when neither side holds it (the bar and the big target say the same).
+  void place_label(int i, int seg_x0) {
+    lv_obj_t *l = seg_label_[i];
+    if (!l || label_w_[i] <= 0) return;
+    const int w = label_w_[i] + ui::px(2), seg_w = label_seg_[i];
+    int x = (seg_w - w) / 2;
+    bool fits = true;
+    if (tick_on_) {
+      const int margin = std::max(1, ui::px(1));
+      const int a = seg_x0 + x - margin, b = seg_x0 + x + w + margin;   // the label, in the track's pixels
+      if (a < tick_x_ + tick_full_ && tick_x_ < b) {
+        const int left = tick_x_ - margin - seg_x0, right = seg_x0 + seg_w - (tick_x_ + tick_full_ + margin);
+        if (left >= w && left >= right) x = (left - w) / 2;
+        else if (right >= w) x = seg_w - right + (right - w) / 2;
+        else fits = false;
+      }
+    }
+    show(l, fits);
+    if (fits) lv_obj_set_x(l, x);
   }
 
   // What follows the clock: the tick on the bar, the pill and the "then" line.
@@ -531,11 +657,16 @@ class RoomTile : public tessera::Tile {
     // No tick without a band to stand on (empty lists), nor when the bar is off.
     const bool bar = bar_visible_ && has_bar_ && !climate_down_ && nseg_ > 0;
     show(tick_, bar && epoch && minute >= 0);
-    if (bar && epoch && minute >= 0) {
+    tick_on_ = bar && epoch && minute >= 0;
+    if (tick_on_) {
       const int x = now_marker(seg_data_, (size_t) nseg_, minute, w_);
       const int full = tick_w_ + 2 * tick_edge_;
-      lv_obj_set_x(tick_, std::min(std::max(0, x - full / 2), w_ - full));
+      tick_full_ = full;
+      tick_x_ = std::min(std::max(0, x - full / 2), w_ - full);
+      lv_obj_set_x(tick_, tick_x_);
     }
+    if (labels_)
+      for (int i = 0; i < nseg_ && i < MAX_SEGMENTS; ++i) place_label(i, spans_x0_[i]);
     if (has_pill_) paint_pill();
     place_zones();
     if (show_then_) {
@@ -590,7 +721,10 @@ class RoomTile : public tessera::Tile {
   int nseg_ = 0;
   int minute_ = -2;
   lv_obj_t *name_{}, *pill_{}, *pill_bg_{}, *set_{}, *now_{}, *dot_{}, *then_{}, *track_{}, *tick_{};
-  lv_obj_t *key_[2]{}, *key_label_[2]{}, *seg_[MAX_SEGMENTS]{};
+  lv_obj_t *key_[2]{}, *key_label_[2]{}, *seg_[MAX_SEGMENTS]{}, *seg_label_[MAX_SEGMENTS]{};
+  int label_w_[MAX_SEGMENTS]{}, label_seg_[MAX_SEGMENTS]{}, spans_x0_[MAX_SEGMENTS]{}, tick_x_ = 0, tick_full_ = 0;
+  bool tick_on_ = false;
+  bool labels_ = false;   // the bar is tall enough for the value of each band, and the tile has more than one cell
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -599,19 +733,6 @@ class RoomTile : public tessera::Tile {
 // mode, temperature, Delete / Save / Back). The geometry and the zones are cronotermostato_pad.h (tested on a computer);
 // what a key does to the bands is EditModel / EditSession in cronotermostato_edit.h. Here they become blocks, labels and the
 // action `cronotermostato.set_day`.
-
-// A cut that does not split a UTF-8 character and ends in dots, for a text the room cannot hold (a name a person chose).
-static std::string fit_cut(std::string s, int max_w, Font font) {
-  if (ui::text_width(s, font) <= max_w) return s;
-  const char *dots = ui::covers("\xE2\x80\xA6", font) ? "\xE2\x80\xA6" : "..";
-  while (!s.empty()) {
-    size_t n = s.size() - 1;
-    while (n > 0 && ((unsigned char) s[n] & 0xC0) == 0x80) --n;
-    s.resize(n);
-    if (ui::text_width(s + dots, font) <= max_w) return s + dots;
-  }
-  return "";
-}
 
 // The lists of the room sensor as the edit model wants them: every list whole (up to one more than the model accepts, so
 // that a day too long is seen as damaged and never cut), the presets and the flags beside them.
@@ -667,6 +788,8 @@ class DayCard : public tessera::Card {
     show_now_ = fixed + mode_long + gap + now_w_ <= w_;
     short_ = !show_now_ && fixed + mode_long > w_;
     mode_w_ = short_ ? mode_short : mode_long;
+    pad_ = pad;
+    gap_ = gap;
 
     // The pad: the keys of the three views, from the real pixels (7 mm where the glass has them).
     PadInput pi;
@@ -913,7 +1036,7 @@ class DayCard : public tessera::Card {
   };
   // A row of the list: a key with the time, the mode, the word "locked" and the temperature in it.
   struct ListRow {
-    lv_obj_t *bg{}, *time{}, *mode{}, *lock{}, *temp{};
+    lv_obj_t *bg{}, *chip{}, *time{}, *mode{}, *lock{}, *temp{};
   };
   enum Detail { K_S0, K_S1, K_S2, K_S3, K_E0, K_E1, K_E2, K_E3, K_MODE, K_TM, K_TP, K_DEL, K_SAVE, K_BACK, K_COUNT };
 
@@ -953,6 +1076,9 @@ class DayCard : public tessera::Card {
   void build_edit(lv_obj_t *parent) {
     const int body_h = ui::line_height(Font::BODY);
     const int pad = ui::px(8), gap = ui::px(8);
+    lchip_w_ = ui::px(5);
+    lpad_ = pad;
+    lgap_ = gap;
     // LIST: header, rows, footer.
     lhdr_ = make_label(parent, L_.list_head.empty() ? Rect{0, 0, w_, body_h} : L_.list_head, LV_TEXT_ALIGN_LEFT);
     lv_obj_set_x(lhdr_, ui::px(6));
@@ -967,7 +1093,7 @@ class DayCard : public tessera::Card {
       mode_long = std::max(mode_long, ui::text_width(mode_word(plugin_, m, false), Font::BODY));
       mode_short = std::max(mode_short, ui::text_width(mode_word(plugin_, m, true), Font::BODY));
     }
-    const int fixed = 2 * pad + time_w_ + gap + temp_w_ + gap;
+    const int fixed = 2 * pad + lchip_w_ + gap + time_w_ + gap + temp_w_ + gap;
     lrow_short_ = fixed + mode_long > w_;
     lrow_mode_w_ = lrow_short_ ? mode_short : mode_long;
     lock_w_ = ui::text_width(plugin_->text("locked_band"), Font::BODY);
@@ -980,12 +1106,15 @@ class DayCard : public tessera::Card {
       lv_obj_set_size(lr.bg, r.w, r.h);
       lv_obj_set_pos(lr.bg, r.x, r.y);
       const int ty = (r.h - body_h) / 2;
+      lr.chip = ui::block(lr.bg, theme::SUBTLE);   // the colour of the band on the bar of the tile
+      lv_obj_set_size(lr.chip, lchip_w_, std::max(2, r.h - 2 * ui::px(6)));
+      lv_obj_set_pos(lr.chip, pad, ui::px(6));
       lr.time = ui::label(lr.bg, Font::BODY, theme::INK);
       lv_obj_set_width(lr.time, time_w_ + ui::px(2));
-      lv_obj_set_pos(lr.time, pad, ty);
+      lv_obj_set_pos(lr.time, pad + lchip_w_ + gap, ty);
       lr.mode = ui::label(lr.bg, Font::BODY, theme::INK);
       lv_obj_set_width(lr.mode, lrow_mode_w_ + ui::px(2));
-      lv_obj_set_pos(lr.mode, pad + time_w_ + gap, ty);
+      lv_obj_set_pos(lr.mode, pad + lchip_w_ + gap + time_w_ + gap, ty);
       lr.temp = ui::label(lr.bg, Font::BODY, theme::INK);
       lv_obj_set_width(lr.temp, temp_w_ + ui::px(2));
       lv_obj_set_style_text_align(lr.temp, LV_TEXT_ALIGN_RIGHT, 0);
@@ -1243,11 +1372,25 @@ class DayCard : public tessera::Card {
       const Row &d = rows_data_[idx];
       show(r.hl, d.current);
       show(r.now, d.current);
-      paint_mode(r.chip, d.mode);
+      paint_band(r.chip, d.mode, d.tint);
       ui::set_text(r.time, format_clock(d.start) + dash_ + format_clock(d.end));
       ui::set_text(r.mode, mode_word(plugin_, d.mode, short_));
-      ui::set_text(r.temp, d.has_temp ? format_temp(d.temp, step_, decimal_, true) : "");
-      if (r.now) ui::set_text(r.now, plugin_->text("right_now"));
+      // The value: the temperature, the preset, or both ("21.5° away") when the row has room; the preset takes the room
+      // the temperature would leave (and that of "Now" on the row of now). The same value is on the bar of the tile.
+      const std::string temp = d.has_temp ? format_temp(d.temp, step_, decimal_, true) : "";
+      const int right = w_ - pad_;
+      const int x_val = pad_ + chip_w_ + gap_ + time_w_ + gap_ + mode_w_ + gap_;
+      const int avail = std::max(temp_w_, right - x_val - (d.current && r.now ? now_w_ + gap_ : 0));
+      const RowValue rv = row_value(temp, d.mode == Mode::OFF ? "" : d.preset, avail, [](const std::string &t) { return ui::text_width(t, Font::BODY); });
+      const std::string value = rv.cut ? fit_cut(rv.text, avail, Font::BODY) : rv.text;
+      const int vw = std::max(temp_w_, std::min(avail, ui::text_width(value, Font::BODY)));   // the box is what the text needs, so "Now" never overlaps it
+      lv_obj_set_width(r.temp, vw + ui::px(2));
+      lv_obj_set_x(r.temp, right - vw - ui::px(2));
+      ui::set_text(r.temp, value);
+      if (r.now) {
+        lv_obj_set_x(r.now, right - vw - gap_ - now_w_ - ui::px(2));
+        ui::set_text(r.now, plugin_->text("right_now"));
+      }
       const theme::Role ink = d.current ? theme::INK : theme::INK_SOFT;
       ui::set_fill(r.hl, Tone::NORMAL, theme::INK);
       ui::set_color(r.time, ink);
@@ -1274,12 +1417,22 @@ class DayCard : public tessera::Card {
     show(lempty_, on && m.size() == 0);
     ui::set_text(lempty_, on && m.size() == 0 ? plugin_->text("edit_empty") : "");
     ui::set_color(lempty_, theme::MUTED);
+    // The tints of the whole day, in its order (a page shows a part of it): the same as the bar of the tile.
+    std::vector<int> tints;
+    {
+      TintBook book;
+      for (size_t k = 0; k < m.size(); ++k) {
+        const EditBand &e = *m.band(k);
+        tints.push_back(book.tint(e.mode, e.mode != Mode::OFF && e.has_temp, to_degrees(e.centi), e.preset));
+      }
+    }
     for (int i = 0; i < L_.rows; ++i) {
       ListRow &lr = lrow_[i];
       const bool vis = i < shown;
       show(lr.bg, vis);
       if (!vis) continue;
       const EditBand &b = *m.band((size_t) (first + i));
+      paint_band(lr.chip, b.mode, tints[(size_t) (first + i)]);
       ui::set_fill(lr.bg, Tone::NORMAL, theme::RAISED);
       const theme::Role ink = b.locked ? theme::MUTED : theme::INK;
       ui::set_text(lr.time, format_clock(b.start) + dash_ + format_clock(b.end));
@@ -1287,10 +1440,19 @@ class DayCard : public tessera::Card {
       const bool lock_word = b.locked && !lrow_lock_;   // no room for both: the word stands for the mode
       ui::set_text(lr.mode, lock_word ? plugin_->text("locked_band") : mode_word(plugin_, b.mode, lrow_short_));
       ui::set_color(lr.mode, ink);
-      std::string temp;
-      if (b.mode != Mode::OFF && b.has_temp) temp = format_temp(to_degrees(b.centi), step_, decimal_, true);
-      else if (b.mode != Mode::OFF && !b.preset.empty()) temp = fit_cut(b.preset, temp_w_, Font::BODY);
-      ui::set_text(lr.temp, temp);
+      // The value as in the reading list: temperature and preset when there is room, the preset in the room the lock word leaves.
+      const std::string temp = b.mode != Mode::OFF && b.has_temp ? format_temp(to_degrees(b.centi), step_, decimal_, true) : "";
+      const int right = L_.row[i].w - lpad_;
+      const int x_val = lpad_ + lchip_w_ + lgap_ + time_w_ + lgap_ + lrow_mode_w_ + lgap_;
+      const bool lock_shown = b.locked && lrow_lock_;
+      const int avail = std::max(temp_w_, right - x_val - (lock_shown ? lock_w_ + lgap_ : 0));
+      const RowValue rv = row_value(temp, b.mode == Mode::OFF ? "" : b.preset, avail, [](const std::string &t) { return ui::text_width(t, Font::BODY); });
+      const std::string value = rv.cut ? fit_cut(rv.text, avail, Font::BODY) : rv.text;
+      const int vw = std::max(temp_w_, std::min(avail, ui::text_width(value, Font::BODY)));
+      lv_obj_set_width(lr.temp, vw + ui::px(2));
+      lv_obj_set_x(lr.temp, right - vw - ui::px(2));
+      lv_obj_set_x(lr.lock, right - vw - lgap_ - lock_w_ - ui::px(2));
+      ui::set_text(lr.temp, value);
       ui::set_color(lr.temp, ink);
       show(lr.lock, b.locked && lrow_lock_);
       ui::set_text(lr.lock, b.locked && lrow_lock_ ? plugin_->text("locked_band") : "");
@@ -1474,6 +1636,7 @@ class DayCard : public tessera::Card {
   Cronotermostato *plugin_;
   const bool edit_option_;   // the tile's option `edit`: without it the card is the list of bands and nothing else
   char entity_[96]{};
+  int pad_ = 0, gap_ = 0;
   int w_ = 0, h_ = 0, line_ = 0, top_ = 0, rows_ = 0, chip_w_ = 0, time_w_ = 0, temp_w_ = 0, now_w_ = 0, mode_w_ = 0, hdr_w_ = 0;
   bool header_ = false, show_now_ = false, short_ = false, holiday_ = false;
   char decimal_ = '.';
@@ -1502,7 +1665,7 @@ class DayCard : public tessera::Card {
   lv_obj_t *cline_[3]{};
   int cline_w_ = 0;
   uint32_t confirm_at_ = 0;   // when the question opened (Confirm waits CONFIRM_GUARD_MS)
-  int lhdr_w_ = 0, lrow_mode_w_ = 0, lock_w_ = 0;
+  int lhdr_w_ = 0, lrow_mode_w_ = 0, lock_w_ = 0, lchip_w_ = 0, lpad_ = 0, lgap_ = 0;
   bool lrow_short_ = false, lrow_lock_ = false;
   int logged_view_ = -1, logged_page_ = -1, logged_shown_ = -1, logged_state_ = -2;
   bool logged_ok_ = false;

@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.2.2
+- **Bands that differ in value are told apart.** Until now two neighbouring heating bands with another preset or another
+  temperature looked the same on the bar (the colour only followed the mode). Now, like the bar of the editor in Home
+  Assistant (the integration after 0.3.2, commit 7c9113d):
+  - Neighbouring bands with the same mode and temperature but **another preset are no longer merged** (the same preset
+    still is). The preset is read from `today_preset`, which the tile already had: no new attribute (the manifest stays at
+    16) and no new permission.
+  - **A tint per value.** In a day, the same mode and the same value (the temperature, or the preset when the band has no
+    temperature) always get the same shade; the first value met of a mode is its plain colour, the next ones are darker in
+    the light look and lighter in the dark look, 4 shades, then it starts again. The text is neutral (ink or the card's
+    ground, whichever reads better): on every shade of heat, cool and off, in both looks, it has at least 4.5 to 1 (tested).
+  - **A clear joint** of 2 px between neighbouring bands (the track shows through). A band never has less than 1 px.
+  - **The value on the band** when it fits: the temperature, or the preset when there is no temperature, cut with dots if
+    it is too long; a narrow band shows a sigla (the temperature rounded as shown, or two letters of the preset), a band
+    under about 12 px shows nothing. Only from the 2x2 look up and never in a 1x1 tile (colours and joints only); the bar
+    grows to one line of text when the tile keeps the same look with it, else it stays thin without labels. The label moves
+    aside, or goes, when the "now" tick would stand on it.
+  - **The card.** The row of the list shows the same value as the bar: the temperature, the preset (it was missing in the
+    reading list), or both ("21.5° away") when there is room, with the colour of the band in the chip. The editing list got
+    the same chip and the same value (before, a preset was cut to the width of "21.5°"). The card has no bar of its own.
+- The tile keeps the preset of each band (at most 40 bytes, blanks trimmed): `memory` goes from 3000 to 5000.
+- Tests: tints, joints, labels and sigla are checked against the editor's own functions (`tools/gen_parity.mjs` makes
+  `tests/tints.inc`, `labels.inc` and `siglas.inc`; it needs the integration repository at commit 7c9113d or later, for `bandTints`).
+- Works with integration 0.3.2: the tile reads the same data. Only the bar of the editor in Home Assistant is newer.
+
 ## 0.2.1
 - **Delete asks first.** The key Delete of the band no longer deletes and saves at once: it opens a question inside the card
   with the band ("08:30-10:30 Heating 21.5°"), a warning "Shared program: N rooms" when the program has more than one
