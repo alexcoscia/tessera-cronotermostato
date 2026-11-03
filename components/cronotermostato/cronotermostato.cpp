@@ -83,33 +83,14 @@ static char decimal_of(const tessera::Plugin *plugin) {
   return *separator ? *separator : '.';
 }
 
-static Tone tone_for(Mode mode) {
-  switch (tone_of(mode)) {
-    case BarTone::AMBER: return Tone::BUSY;
-    case BarTone::BLUE: return Tone::ACCENT;
-    default: return Tone::NORMAL;
-  }
-}
-
-// The colour of a band: the colour of its mode (heat is Home Assistant's amber, cool the look's blue, off the grey role
-// SUBTLE), with a share of the ink mixed in for the second, third and fourth value of the same mode in the day (a tint is a
-// shade of the mode's colour in both looks). The text on it is neutral: see text_on().
-static lv_color_t band_fill(Mode mode, int tint) {
-  const lv_color_t base = ui::tone_color(tone_for(mode), theme::SUBTLE);
-  const uint8_t share = tint_share(tint);
-  return share ? lv_color_mix(ui::color(theme::INK), base, share) : base;
-}
-static uint32_t rgb_of(lv_color_t c) { return lv_color_to_u32(c) & ((1u << 24) - 1); }
-// A block in the colour of a band; returns that colour (to choose the text on it).
-static lv_color_t paint_band(lv_obj_t *block, Mode mode, int tint) {
-  const lv_color_t c = band_fill(mode, tint);
-  lv_obj_set_style_bg_color(block, c, 0);
+// The colours of a band: fill and text from the palette of the editor in Home Assistant (cronotermostato_logic.h, BAND_PALETTE),
+// by mode, tint and look. Four tints of different hue for each mode, tint 0 the plain colour of the mode. Constants, no theme role.
+static lv_color_t color_of(uint32_t rgb) { return lv_color_make((uint8_t) (rgb >> 16 & 0xFF), (uint8_t) (rgb >> 8 & 0xFF), (uint8_t) (rgb & 0xFF)); }
+// A block in the colour of a band; returns the colours (the text goes on the fill).
+static BandColors paint_band(lv_obj_t *block, Mode mode, int tint) {
+  const BandColors c = band_colors(mode, tint, theme::dark);
+  lv_obj_set_style_bg_color(block, color_of(c.fill), 0);
   return c;
-}
-// Of the two neutral roles, ink and the card's ground, the one that reads better on this fill (the roles swap their light
-// and dark values, so one of them is always dark and the other light).
-static theme::Role text_on(lv_color_t fill) {
-  return first_reads_better(rgb_of(fill), rgb_of(ui::color(theme::INK)), rgb_of(ui::color(theme::CARD))) ? theme::INK : theme::CARD;
 }
 
 static const char *mode_word(const tessera::Plugin *plugin, Mode mode, bool shortly) {
@@ -585,7 +566,7 @@ class RoomTile : public tessera::Tile {
       show(seg_[i], true);
       lv_obj_set_pos(seg_[i], spans[i].x0, 0);
       lv_obj_set_size(seg_[i], std::max(1, spans[i].x1 - spans[i].x0), bar_h_);
-      const lv_color_t fill = paint_band(seg_[i], s.mode, s.tint);
+      const BandColors fill = paint_band(seg_[i], s.mode, s.tint);
       spans_x0_[i] = spans[i].x0;
       if (labels_) paint_label(i, s, std::max(1, spans[i].x1 - spans[i].x0), fill);
     }
@@ -596,7 +577,7 @@ class RoomTile : public tessera::Tile {
 
   // The value on a segment, by the width it has (label_level: nothing, a sigla, the value): the temperature, or the preset
   // when the band has none. Whole if it fits, else cut with dots (two letters at least), else the sigla, else nothing.
-  void paint_label(int i, const Segment &s, int width, lv_color_t fill) {
+  void paint_label(int i, const Segment &s, int width, const BandColors &colors) {
     lv_obj_t *l = seg_label_[i];
     if (!l) return;
     const bool value = s.mode != Mode::OFF && (s.has_temp || !s.preset.empty());
@@ -626,7 +607,7 @@ class RoomTile : public tessera::Tile {
     lv_obj_set_width(l, label_w_[i] + ui::px(2));
     lv_obj_set_y(l, std::max(0, (bar_h_ - ui::line_height(Font::BODY)) / 2));
     ui::set_text(l, text);
-    ui::set_color(l, text_on(fill));
+    lv_obj_set_style_text_color(l, color_of(colors.text), 0);
     place_label(i, spans_x0_[i]);
   }
 

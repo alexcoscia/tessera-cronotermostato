@@ -1,4 +1,4 @@
-// Regenerates tests/parity.inc, tests/overlap.inc, tests/tints.inc, tests/labels.inc and tests/siglas.inc from the editor's own functions
+// Regenerates tests/parity.inc, tests/overlap.inc, tests/tints.inc, tests/labels.inc, tests/siglas.inc and tests/palette.inc from the editor's own functions
 // (integration repository): `stripSegments`, `bandTints`, `segmentDetail` and `presetSigla` of lib/day-editing.js.
 //   node tools/gen_parity.mjs [path of the cronotermostato integration repository]
 // The default path is ../cronotermostato. parity.inc: the valid days of tests/frontend/cases.json plus two days with
@@ -71,3 +71,23 @@ const siglaLines = presets.map((p) => `  {${JSON.stringify(p)}, ${JSON.stringify
 fs.writeFileSync(path.join(here, "..", "tests", "labels.inc"), lines(levelLines));
 fs.writeFileSync(path.join(here, "..", "tests", "siglas.inc"), lines(siglaLines));
 console.log(`tints.inc: ${tintDays.length} days, labels.inc: ${levelLines.length} widths, siglas.inc: ${siglaLines.length} siglas`);
+
+// palette.inc: the colours of the editor (styles.js: --crono-<mode>-v<n>-bg and --crono-<mode>-v<n>, v0 is --crono-<mode>-bg and
+// --crono-<mode>) as {look (0 light, 1 dark), mode (0 heat, 1 cool, 2 off), tint, fill, text}. The light look is the block
+// ":host {", the dark one ":host([dark]) {". The test checks BAND_PALETTE of the tile against them.
+const styles = fs.readFileSync(path.join(repo, "custom_components/cronotermostato/frontend/styles.js"), "utf8");
+const darkAt = styles.indexOf(":host([dark]) {");
+const blocks = [styles.slice(styles.indexOf(":host {"), darkAt), styles.slice(darkAt, styles.indexOf("}", darkAt))];
+const paletteLines = [];
+blocks.forEach((block, look) => {
+  ["heat", "cool", "off"].forEach((mode, m) => {
+    for (let t = 0; t < 4; t++) {
+      const bg = block.match(new RegExp(`--crono-${mode}${t ? `-v${t}` : ""}-bg:\\s*#([0-9a-fA-F]{6})`));
+      const fg = block.match(new RegExp(`--crono-${mode}${t ? `-v${t}` : ""}:\\s*#([0-9a-fA-F]{6})`));
+      if (!bg || !fg) throw new Error(`styles.js: colour ${mode} v${t} missing in look ${look}`);
+      paletteLines.push(`  {${look}, ${m}, ${t}, 0x${bg[1].toUpperCase()}, 0x${fg[1].toUpperCase()}},`);
+    }
+  });
+});
+fs.writeFileSync(path.join(here, "..", "tests", "palette.inc"), lines(paletteLines));
+console.log(`palette.inc: ${paletteLines.length} colours`);

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.3
+- **Sharp colours per value.** The shades of 0.2.2 (a share of ink mixed into the colour of the mode) were too faint on the
+  panel, as they were in the editor. The tile now takes the **palette of the editor in Home Assistant** (integration commit
+  4e529dc, `bandTints`): for each mode 4 tints of different hue, not only of different lightness.
+  - Heat: amber, brick red, gold, olive. Cool: pale blue, cyan, violet, azure. Off: four greys.
+  - Used for the fill of the bar and for the chip of the rows of the card (reading and editing lists).
+  - The text on a band is the text colour of the palette for that tint, no longer "ink or the card's ground": at least 4.5 to 1
+    on every fill, in both looks (tested).
+  - Tint 0, the plain colour of the mode, now comes from the palette too (before: Tessera's amber and blue). The old amber
+    and blue were too near gold and azure (CIEDE2000 13 from the azure, 17 from the gold); the palette's first tints are paler
+    in the light look and deeper in the dark one, as in the editor.
+  - The look (light or dark) of the screen picks the column of colours. Plain colour constants in the code: no word, no translation.
+- Tests: the palette is checked against the editor's `styles.js` (`tools/gen_parity.mjs` makes `tests/palette.inc`), text
+  4.5 to 1 and tints of one mode at least 15 apart (CIEDE2000) in both looks, heat at least 15 from cool and off. Cool against off
+  has less room: the editor's pale blue and pale grey of tint 0 are 7.8 apart in the light look, so the test asks 7 (an off band
+  also says "Off" in the list).
+- Works with integration 0.3.2 or later; the tile reads the same data.
+
 ## 0.2.2
 - **Bands that differ in value are told apart.** Until now two neighbouring heating bands with another preset or another
   temperature looked the same on the bar (the colour only followed the mode). Now, like the bar of the editor in Home

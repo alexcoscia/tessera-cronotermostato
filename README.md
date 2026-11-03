@@ -41,20 +41,20 @@ the list of today's bands.
   while it cools.
 - A line that says the state of the program: "Auto" and the program's name, "Manual until 18:00 x", "Paused",
   "No program", "Problem" or "Unavailable". A line "Then Heating 21.5 at 17:00" shows when there is room for it.
-- A bar with today's bands, from 00:00 to 24:00: amber for heating, blue for cooling, grey for off, and a dark tick for
+- A bar with today's bands, from 00:00 to 24:00: warm colours for heating, cool ones for cooling, grey for off, and a dark tick for
   now. Bands of the same mode that differ in value are told apart, as in the editor in Home Assistant:
   - **Not merged.** Neighbouring bands with another temperature or another preset stay two bands (the same preset, one).
-  - **A shade per value.** The value is the temperature, or the preset when the band has no temperature. In a day, the same
-    mode and value always have the same shade: the first one is the plain colour, the next ones (up to 4 shades, then it
-    starts again) are darker in the light look and lighter in the dark one. The text is never coloured: ink or the card's
-    ground, whichever reads better (at least 4.5 to 1 on every shade, in both looks).
+  - **A tint per value.** The value is the temperature, or the preset when the band has no temperature. In a day, the same
+    mode and value always have the same tint (up to 4, then it starts again). The tints are the palette of the editor, with
+    different hues: heat amber, brick red, gold, olive; cool pale blue, cyan, violet, azure; off four greys. Each tint has
+    its own text colour (at least 4.5 to 1 on its fill, in both looks); the look of the screen picks the light or dark column.
   - **A joint of 2 px** between neighbours (the track shows through); a band keeps at least 1 px.
   - **The value on the band** (from 2 cells up, never in a 1x1 tile, which has colours and joints only): the temperature, or
     the preset, cut with dots when long; a narrow band shows two letters of the preset or the temperature without its
     degree sign; under about 12 px nothing. The bar is one line of text high when the tile keeps its look with that, else
     thin and without labels. The label steps aside, or goes, when the "now" tick would stand on it.
   - Example, the program "Casa" on a Tuesday: heat with the preset away 00:00-15:00, home 15:00-22:30, away 22:30-24:00, no
-    temperature: three bands, away and home in two shades, the two aways in the same one (`preview.yaml`, tile "Casa").
+    temperature: three bands, away and home in two clearly different colours (amber and brick red), the two aways in the same one (`preview.yaml`, tile "Casa").
   - Needs no new attribute: the presets come in `today_preset`, already one of the 16 of the manifest.
 
 ## Sizes
@@ -190,9 +190,9 @@ tests/run.sh
 `tests/parity.inc` holds bar positions computed by the editor's own `stripSegments` (integration repository,
 `tests/frontend/cases.json`); the bar must match them within a pixel. `tests/overlap.inc` holds a day with overlapping
 bands: the editor draws them over each other, the tile trims the later one (a deliberate difference). `tests/tints.inc`,
-`labels.inc` and `siglas.inc` hold what the editor's `bandTints`, `segmentDetail` and `presetSigla` say (the tile matches
+`labels.inc`, `siglas.inc` and `palette.inc` (the colours of the editor's `styles.js`) hold what the editor's `bandTints`, `segmentDetail` and `presetSigla` say (the tile matches
 them; one known difference: it does not change the case of letters outside ASCII). Regenerate all with
-`node tools/gen_parity.mjs [path of the integration repository]` (default `../cronotermostato`, at commit 7c9113d or later).
+`node tools/gen_parity.mjs [path of the integration repository]` (default `../cronotermostato`, at commit 4e529dc or later).
 
 The touch flow of the bench (`tools/bench_flow.py`) opens the card of the first room tile with real taps, enters the
 editing, adds a band, saves, answers the way the integration does (new bands, a refusal, a change made elsewhere), deletes

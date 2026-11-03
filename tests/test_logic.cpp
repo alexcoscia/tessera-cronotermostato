@@ -2038,31 +2038,48 @@ TEST(row_value_ladder) {
   CHECK(!v.cut && v.text.empty());
 }
 
-// The colours of the look, copied from the firmware's theme table (components/smart_display/theme.h, light and dark): the
-// colour of each mode as the tile takes it (Home Assistant's amber, the look's accent, the grey role SUBTLE), ink and the card.
-struct Look {
-  const char *name;
-  uint32_t heat, cool, off, ink, card;
-};
-static const Look LOOKS[2] = {{"light", 0xFFC107, 0x009FE3, 0x6B6B6B, 0x1B1B1B, 0xFFFFFF},
-                              {"dark", 0xFFC107, 0x0A93D2, 0x8A8A8A, 0xDADADA, 0x1A1A1A}};
-// lv_color_mix(first, second, amount) as LVGL 9 does it
-static uint32_t mix_rgb(uint32_t first, uint32_t second, uint8_t amount) {
-  uint32_t out = 0;
-  for (int shift = 16; shift >= 0; shift -= 8) {
-    const uint32_t a = first >> shift & 0xFF, b = second >> shift & 0xFF;
-    out |= (((a * amount + b * (255 - amount)) * 0x8081U) >> 23) << shift;
+// CIEDE2000 between two colours 0xRRGGBB (D65), as the editor's test (tests/frontend/contrast.test.mjs) measures the tints apart.
+static void to_lab(uint32_t rgb, double &L, double &a, double &b) {
+  double c[3];
+  for (int i = 0; i < 3; ++i) {
+    const double v = (double) ((rgb >> (16 - 8 * i)) & 0xFF) / 255.0;
+    c[i] = v <= 0.04045 ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4);
   }
-  return out;
+  const double x = (0.4124564 * c[0] + 0.3575761 * c[1] + 0.1804375 * c[2]) / 0.95047;
+  const double y = 0.2126729 * c[0] + 0.7151522 * c[1] + 0.0721750 * c[2];
+  const double z = (0.0193339 * c[0] + 0.1191920 * c[1] + 0.9503041 * c[2]) / 1.08883;
+  auto f = [](double t) { return t > 216.0 / 24389.0 ? std::cbrt(t) : (24389.0 / 27.0 * t + 16.0) / 116.0; };
+  L = 116.0 * f(y) - 16.0;
+  a = 500.0 * (f(x) - f(y));
+  b = 200.0 * (f(y) - f(z));
 }
-static uint32_t tint_fill(uint32_t base, uint32_t ink, int tint) {
-  const uint8_t share = tint_share(tint);
-  return share ? mix_rgb(ink, base, share) : base;
-}
-static int channel_distance(uint32_t a, uint32_t b) {
-  int d = 0;
-  for (int shift = 16; shift >= 0; shift -= 8) d += std::abs((int) (a >> shift & 0xFF) - (int) (b >> shift & 0xFF));
-  return d;
+static double delta_e2000(uint32_t c1, uint32_t c2) {
+  const double pi = 3.14159265358979323846, rad = pi / 180.0;
+  double L1, a1, b1, L2, a2, b2;
+  to_lab(c1, L1, a1, b1);
+  to_lab(c2, L2, a2, b2);
+  const double Cb = (std::hypot(a1, b1) + std::hypot(a2, b2)) / 2.0;
+  const double G = 0.5 * (1.0 - std::sqrt(std::pow(Cb, 7) / (std::pow(Cb, 7) + std::pow(25.0, 7))));
+  const double a1p = (1 + G) * a1, a2p = (1 + G) * a2;
+  const double C1 = std::hypot(a1p, b1), C2 = std::hypot(a2p, b2);
+  auto hue = [&](double b, double a) { const double h = std::atan2(b, a) / rad; return (a == 0 && b == 0) ? 0.0 : (h < 0 ? h + 360 : h); };
+  const double h1 = hue(b1, a1p), h2 = hue(b2, a2p);
+  double dh = 0;
+  if (C1 * C2 != 0) {
+    dh = h2 - h1;
+    if (dh > 180) dh -= 360;
+    else if (dh < -180) dh += 360;
+  }
+  const double dL = L2 - L1, dC = C2 - C1, dH = 2 * std::sqrt(C1 * C2) * std::sin(dh * rad / 2);
+  const double Lb = (L1 + L2) / 2, Cbp = (C1 + C2) / 2;
+  double hb = h1 + h2;
+  if (C1 * C2 != 0) hb = std::fabs(h1 - h2) <= 180 ? (h1 + h2) / 2 : (h1 + h2 < 360 ? (h1 + h2 + 360) / 2 : (h1 + h2 - 360) / 2);
+  const double T = 1 - 0.17 * std::cos((hb - 30) * rad) + 0.24 * std::cos(2 * hb * rad) + 0.32 * std::cos((3 * hb + 6) * rad) - 0.20 * std::cos((4 * hb - 63) * rad);
+  const double dth = 30 * std::exp(-std::pow((hb - 275) / 25, 2));
+  const double Rc = 2 * std::sqrt(std::pow(Cbp, 7) / (std::pow(Cbp, 7) + std::pow(25.0, 7)));
+  const double Sl = 1 + 0.015 * std::pow(Lb - 50, 2) / std::sqrt(20 + std::pow(Lb - 50, 2)), Sc = 1 + 0.045 * Cbp, Sh = 1 + 0.015 * Cbp * T;
+  const double Rt = -std::sin(2 * dth * rad) * Rc;
+  return std::sqrt(std::pow(dL / Sl, 2) + std::pow(dC / Sc, 2) + std::pow(dH / Sh, 2) + Rt * (dC / Sc) * (dH / Sh));
 }
 
 TEST(contrast_helpers) {
@@ -2077,46 +2094,72 @@ TEST(contrast_helpers) {
         std::fabs(relative_luminance(0x0000FF) - 0.0722) < 1e-6);
   CHECK(std::fabs(contrast_ratio(0xFFC107, 0x1B1B1B) - 10.5668) < 1e-3);
   CHECK(std::fabs(contrast_ratio(0x009FE3, 0xFFFFFF) - 2.9709) < 1e-3);
-  CHECK(first_reads_better(0xFFC107, 0x1B1B1B, 0xFFFFFF));
-  CHECK(!first_reads_better(0x101010, 0x1B1B1B, 0xFFFFFF));
-  CHECK(first_reads_better(0x808080, 0x808080, 0x808080));   // a tie goes to the first
 }
 
-TEST(tint_shares_grow_and_are_clamped) {
-  CHECK(tint_share(0) == 0);
-  for (int i = 1; i < TINT_COUNT; ++i) CHECK(tint_share(i) > tint_share(i - 1));
-  CHECK(tint_share(-1) == tint_share(0));
-  CHECK(tint_share(TINT_COUNT + 7) == tint_share(TINT_COUNT - 1));
+TEST(palette_matches_the_editor) {
+  // tests/palette.inc comes from the editor's styles.js (tools/gen_parity.mjs): {look, mode, tint, fill, text}
+  struct Row { int look, mode, tint; uint32_t fill, text; };
+  static const Row rows[] = {
+#include "palette.inc"
+  };
+  CHECK(sizeof(rows) / sizeof(rows[0]) == 24);
+  const Mode modes[3] = {Mode::HEAT, Mode::COOL, Mode::OFF};
+  for (const Row &r : rows) {
+    const BandColors c = band_colors(modes[r.mode], r.tint, r.look == 1);
+    if (c.fill != r.fill || c.text != r.text) std::printf("  look %d mode %d tint %d: %06X/%06X, the editor has %06X/%06X\n", r.look, r.mode, r.tint, (unsigned) c.fill, (unsigned) c.text, (unsigned) r.fill, (unsigned) r.text);
+    CHECK(c.fill == r.fill && c.text == r.text);
+  }
 }
 
-TEST(tints_are_readable_and_apart_in_both_looks) {
-  for (const Look &look : LOOKS) {
-    for (uint32_t base : {look.heat, look.cool, look.off}) {
-      uint32_t fills[TINT_COUNT];
+TEST(band_colors_clamp_the_tint_and_the_mode) {
+  CHECK(band_colors(Mode::HEAT, -1, false).fill == band_colors(Mode::HEAT, 0, false).fill);
+  CHECK(band_colors(Mode::COOL, TINT_COUNT + 7, true).fill == band_colors(Mode::COOL, TINT_COUNT - 1, true).fill);
+  CHECK(band_colors(mode_from_code(7), 2, false).fill == band_colors(Mode::OFF, 2, false).fill);
+}
+
+TEST(band_text_is_readable_in_both_looks) {
+  // 4.5 to 1 of the text on its own fill, every tint of every mode, light and dark
+  for (int dark = 0; dark < 2; ++dark)
+    for (Mode m : {Mode::HEAT, Mode::COOL, Mode::OFF})
       for (int t = 0; t < TINT_COUNT; ++t) {
-        fills[t] = tint_fill(base, look.ink, t);
-        // the text on a fill is ink or the card's ground, whichever reads better: 4.5 to 1 on every tint
-        const double best = std::max(contrast_ratio(fills[t], look.ink), contrast_ratio(fills[t], look.card));
-        if (best < 4.5) std::printf("  %s %06X tint %d: %.2f\n", look.name, (unsigned) base, t, best);
-        CHECK(best >= 4.5);
+        const BandColors c = band_colors(m, t, dark == 1);
+        const double ratio = contrast_ratio(c.fill, c.text);
+        if (ratio < 4.5) std::printf("  dark %d mode %d tint %d: %.2f\n", dark, (int) m, t, ratio);
+        CHECK(ratio >= 4.5);
       }
-      CHECK(fills[0] == base);                                   // tint 0 is the plain colour of the mode
-      for (int a = 0; a < TINT_COUNT; ++a)
-        for (int b = a + 1; b < TINT_COUNT; ++b) CHECK(channel_distance(fills[a], fills[b]) >= 40);   // the tints can be told apart
-    }
-  }
 }
 
-TEST(tinted_fill_is_a_shade_of_its_mode) {
-  // a tint moves the colour towards ink and never away from its hue: in the light look it only gets darker, in the dark look lighter
-  const Look &light = LOOKS[0], &dark = LOOKS[1];
-  for (int t = 1; t < TINT_COUNT; ++t) {
-    CHECK(relative_luminance(tint_fill(light.heat, light.ink, t)) < relative_luminance(tint_fill(light.heat, light.ink, t - 1)));
-    CHECK(relative_luminance(tint_fill(dark.heat, dark.ink, t)) > relative_luminance(tint_fill(dark.heat, dark.ink, t - 1)));
-  }
-  // heat stays warmer than cool, cool bluer: the red channel of heat stays above its blue one on every tint of the light look
-  for (int t = 0; t < TINT_COUNT; ++t) {
-    const uint32_t h = tint_fill(light.heat, light.ink, t), c = tint_fill(light.cool, light.ink, t);
+TEST(tints_of_one_mode_differ_in_both_looks) {
+  for (int dark = 0; dark < 2; ++dark)
+    for (Mode m : {Mode::HEAT, Mode::COOL, Mode::OFF})
+      for (int a = 0; a < TINT_COUNT; ++a)
+        for (int b = a + 1; b < TINT_COUNT; ++b) {
+          const double d = delta_e2000(band_colors(m, a, dark == 1).fill, band_colors(m, b, dark == 1).fill);
+          if (d < 15) std::printf("  dark %d mode %d tints %d/%d: %.1f\n", dark, (int) m, a, b, d);
+          CHECK(d >= 15);   // the editor's own bar (CIEDE2000 >= 15 between any two fills of a mode)
+        }
+}
+
+TEST(no_tint_of_a_mode_is_taken_for_another_mode) {
+  // Heat stands apart from cool and off (>= 15). Cool and off are both quiet colours: the palette of the editor keeps the pale blue and
+  // the pale grey of tint 0 only 7.8 apart in the light look (13.6 in the dark one), so cool against off has 7 (the word tells the rest).
+  for (int dark = 0; dark < 2; ++dark)
+    for (int a = 0; a < TINT_COUNT; ++a)
+      for (int b = 0; b < TINT_COUNT; ++b) {
+        const uint32_t heat = band_colors(Mode::HEAT, a, dark == 1).fill, cool = band_colors(Mode::COOL, b, dark == 1).fill, off = band_colors(Mode::OFF, b, dark == 1).fill;
+        CHECK(delta_e2000(heat, cool) >= 15);
+        CHECK(delta_e2000(heat, off) >= 15);
+        CHECK(delta_e2000(band_colors(Mode::COOL, a, dark == 1).fill, off) >= 7.0);
+      }
+  // a band without a value (off has none) is always tint 0: against the cool tints a value can give, the grey is >= 7.5 apart
+  for (int dark = 0; dark < 2; ++dark)
+    for (int t = 0; t < TINT_COUNT; ++t) CHECK(delta_e2000(band_colors(Mode::OFF, 0, dark == 1).fill, band_colors(Mode::COOL, t, dark == 1).fill) >= 7.5);
+}
+
+TEST(heat_and_cool_hues_stay_in_their_family) {
+  // tint 0 of heat is warm (red above blue) and of cool is cool (blue above red), in both looks
+  for (int dark = 0; dark < 2; ++dark) {
+    const uint32_t h = band_colors(Mode::HEAT, 0, dark == 1).fill, c = band_colors(Mode::COOL, 0, dark == 1).fill;
     CHECK((h >> 16 & 0xFF) > (h & 0xFF));
     CHECK((c & 0xFF) > (c >> 16 & 0xFF));
   }
