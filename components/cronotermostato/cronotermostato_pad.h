@@ -8,6 +8,10 @@
 //                    temperature, Delete / Save / Back). Rows per page follow the real height.
 //   - pad_zone_at()  which key a tap at (x, y) hits. The zones of one view never overlap and are the key's rectangle grown
 //                    by half the gap, so a finger between two keys still hits one of them, never both.
+//   - the confirmation of Delete (view CONFIRM): the band is shown with two big keys, Cancel at the left and Confirm at the
+//                    right, a wide gap apart. Confirm never stands where Delete stood and ignores the first 600 ms (a double
+//                    tap on Delete cannot confirm); confirm_tap(), delete_gate(), confirm_survives() and the texts are here so
+//                    they are tested on a computer.
 //   - the texts      which translation key says a message, a notice, a refusal or the state of Save, in a long form and a
 //                    short one (the card picks the one that fits the room it has).
 // A tap on a screen cannot be told apart from where the finger was: the core gives one on_tap per card and
@@ -34,7 +38,7 @@ struct Rect {
   }
 };
 
-enum class EView { READ, LIST, DETAIL };
+enum class EView { READ, LIST, DETAIL, CONFIRM };
 enum class EZ {
   NONE,
   OPEN,                                  // READ: the key "Edit"
@@ -44,6 +48,7 @@ enum class EZ {
   E_M60, E_M15, E_P15, E_P60,            // DETAIL: end
   MODE, TEMP_M, TEMP_P,                  // DETAIL: mode (cycles), temperature - and +
   DELETE, SAVE, BACK,                    // DETAIL: footer
+  CONFIRM_NO, CONFIRM_YES,               // CONFIRM: Cancel (left) and Confirm (right)
 };
 struct EZone {
   EZ kind = EZ::NONE;
@@ -65,6 +70,7 @@ struct PadInput {
   int open_w = 0;       // the key "Edit": its word and its margin
   int key_max_w = 0;    // the widest key of the detail (0: no limit)
   int key_max_h = 0;    // the tallest key of the detail (0: no limit)
+  int wide_gap = 0;     // between Cancel and Confirm (0: four times `gap`); never more than a third of the width
 };
 
 constexpr int PAD_MAX_ROWS = (int) EDIT_MAX_ROWS;
@@ -96,6 +102,13 @@ struct PadLayout {
   bool detail_small = false;        // keys under 7 mm
   int detail_bottom = 0;
   bool detail_fits = false;
+  // CONFIRM: up to three lines of text (the question, the band, the warning of a shared program), the two keys under them
+  int conf_gap = 0;                 // between Cancel and Confirm
+  int conf_key_h = 0;
+  bool conf_small = false;          // keys under 7 mm
+  int conf_lines = 0;               // lines of text that fit (0..3)
+  Rect conf_line[3];                // the lines, centred in the room over the keys
+  Rect conf_no, conf_yes;           // Cancel at the left, Confirm at the right
 };
 
 // Everything is worked out from the input alone.
@@ -197,6 +210,31 @@ inline PadLayout make_pad(const PadInput &in_) {
     L.detail_bottom = ys[3] + dk;
     L.detail_fits = L.detail_bottom <= h;
   }
+
+  // --- CONFIRM --------------------------------------------------------------------------------------------------
+  {
+    // Two text lines always have room (the band and the question or the warning); the keys give way before the text does.
+    const int need_text = 2 * in.line_h + 2 * gap;
+    int ck = key_h;
+    if (h - ck - gap < need_text) ck = std::max(1, h - gap - need_text);
+    L.conf_key_h = ck;
+    L.conf_small = ck < key_h;
+    int cg = in.wide_gap > 0 ? in.wide_gap : 4 * gap;
+    cg = std::max(std::min(cg, w / 3), 2 * gap);
+    L.conf_gap = cg;
+    const int kw = std::max(1, (w - cg) / 2);
+    L.conf_gap = std::max(0, w - 2 * kw);   // what the keys really leave (an odd width gives the gap one more pixel)
+    const int ky = std::max(0, h - ck);
+    L.conf_no = {0, ky, kw, std::min(ck, h)};
+    L.conf_yes = {w - kw, ky, kw, std::min(ck, h)};
+    const int pitch = in.line_h + 2 * gap;
+    const int room = ky - gap;   // the height over the keys
+    const int n = std::max(0, std::min(3, (room + 2 * gap) / std::max(1, pitch)));
+    L.conf_lines = n;
+    const int used = n > 0 ? n * pitch - 2 * gap : 0;
+    const int top = std::max(0, (room - used) / 2);
+    for (int i = 0; i < n; ++i) L.conf_line[i] = {0, top + i * pitch, w, in.line_h};
+  }
   return L;
 }
 
@@ -234,6 +272,10 @@ inline EZone pad_zone_at(const PadLayout &L, EView view, int shown_rows, int x, 
       if (hit(L.back)) return {EZ::BACK, -1};
       return {};
     }
+    case EView::CONFIRM:
+      if (hit(L.conf_no)) return {EZ::CONFIRM_NO, -1};
+      if (hit(L.conf_yes)) return {EZ::CONFIRM_YES, -1};
+      return {};
   }
   return {};
 }
@@ -257,6 +299,50 @@ inline bool time_key(EZ z, KeyStep &out) {
     case EZ::E_P60: out = {false, EDIT_BIG_STEP}; return true;
     default: return false;
   }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The confirmation of Delete
+
+// Confirm ignores taps this long after the confirmation opened: a double tap on Delete (a finger that lands twice) cannot
+// confirm. Cancel works at once.
+constexpr uint32_t CONFIRM_GUARD_MS = 600;
+
+enum class ConfirmTap { NONE, CANCEL, DELETE };
+// What a tap on zone `z` does, `now` and `opened_at` in milliseconds (the clock may wrap).
+inline ConfirmTap confirm_tap(EZ z, uint32_t now, uint32_t opened_at) {
+  if (z == EZ::CONFIRM_NO) return ConfirmTap::CANCEL;
+  if (z == EZ::CONFIRM_YES && expired(now, opened_at, CONFIRM_GUARD_MS)) return ConfirmTap::DELETE;
+  return ConfirmTap::NONE;
+}
+
+// Which lines of the confirmation to draw when `lines` fit (0..3): the band always, then the warning of a shared program,
+// then the question. Top to bottom they stand as question, band, warning.
+struct ConfirmLines {
+  bool question = false, band = false, warning = false;
+};
+inline ConfirmLines confirm_lines(int lines, bool shared) {
+  ConfirmLines c;
+  const int n = std::min(std::max(lines, 0), shared ? 3 : 2);
+  if (n >= 1) c.band = true;
+  if (shared) {
+    if (n >= 2) c.warning = true;
+    if (n >= 3) c.question = true;
+  } else if (n >= 2) {
+    c.question = true;
+  }
+  return c;
+}
+
+// The warning is for a program that more than one room uses. An unknown count (-1) or one room says nothing.
+inline bool confirm_shared(int rooms) { return rooms > 1; }
+
+// "08:30-10:30 Heat 21.5°": the time, the mode and, when there is one, the temperature.
+inline std::string band_summary(const std::string &time, const std::string &mode, const std::string &temp) {
+  std::string s = time;
+  if (!mode.empty()) s += (s.empty() ? "" : " ") + mode;
+  if (!temp.empty()) s += (s.empty() ? "" : " ") + temp;
+  return s;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -315,6 +401,43 @@ inline TextKeys error_text(const std::string &code) {
     if (code == e.code) return {e.full, e.shortly};
   return {"err_unknown", "err_unknown_s"};
 }
+
+// The words of the confirmation (the warning has {n} for the number of rooms).
+struct ConfirmWords {
+  TextKeys question, shared;
+  const char *yes, *no;
+};
+inline ConfirmWords confirm_words() {
+  return {{"confirm_q", "confirm_q_s"}, {"confirm_shared", "confirm_shared_s"}, "confirm_yes", "confirm_no"};
+}
+
+// May Delete open the confirmation for the selected band? `why` says what stops it (the same words the keys use), empty when
+// the reason is not worth a word (nothing selected). Nothing here changes the copy.
+struct DeleteGate {
+  bool ok = false;
+  TextKeys why;
+};
+inline DeleteGate delete_gate(const EditModel &m) {
+  DeleteGate g;
+  const EditBand *b = m.selected() >= 0 ? m.band((size_t) m.selected()) : nullptr;
+  if (!b) return g;
+  if (m.damaged()) {
+    g.why = block_text(SaveBlock::DAMAGED);
+  } else if (m.frozen()) {
+    g.why = msg_text(Msg::EDIT_BLOCKED);
+  } else if (b->locked) {
+    g.why = msg_text(Msg::LOCKED);
+  } else if (m.has_locked()) {
+    g.why = block_text(SaveBlock::LOCKED);   // another band of the day is locked: the day cannot be saved from here
+  } else {
+    g.ok = true;
+  }
+  return g;
+}
+
+// Whether the confirmation stays open after on_state() said `ev`. Any news (the bands reloaded, changed elsewhere, another
+// day, the answer to a save) closes it without sending: what was shown may not be what is there now.
+inline bool confirm_survives(EditEvent ev) { return ev == EditEvent::NONE; }
 
 // The state of Save as the key says it, in one word.
 inline const char *save_key(SaveState s) {

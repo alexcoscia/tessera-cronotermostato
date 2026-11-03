@@ -2,7 +2,7 @@
 # entities): the target temperature with plus and minus keys, and a bar with today's bands of the room's program.
 # Every field is explained in docs/MANIFEST.md of tessera-plugins.
 id: cronotermostato
-version: 0.2.0
+version: 0.2.1
 api: "0.24"
 icon: thermometer
 maintainer: alexcoscia

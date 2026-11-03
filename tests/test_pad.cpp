@@ -77,6 +77,7 @@ static PadInput input_of(const Board &b) {
   in.open_w = b.line * 5;
   in.key_max_w = b.mm7 * 26 / 7;
   in.key_max_h = b.mm7 * 12 / 7;
+  in.wide_gap = b.mm7 * 8 / 7;
   return in;
 }
 
@@ -95,6 +96,9 @@ static std::vector<Keyed> keys_of(const PadLayout &L, EView v, int shown) {
     add(L.prev, EZ::PREV);
     add(L.next, EZ::NEXT);
     add(L.add, EZ::ADD);
+  } else if (v == EView::CONFIRM) {
+    add(L.conf_no, EZ::CONFIRM_NO);
+    add(L.conf_yes, EZ::CONFIRM_YES);
   } else {
     static const EZ s[4] = {EZ::S_M60, EZ::S_M15, EZ::S_P15, EZ::S_P60};
     static const EZ e[4] = {EZ::E_M60, EZ::E_M15, EZ::E_P15, EZ::E_P60};
@@ -186,7 +190,7 @@ TEST(the_header_line_is_kept_while_three_rows_still_fit) {
 TEST(everything_inside_the_room) {
   for (const Board &b : BOARDS) {
     const PadLayout L = make_pad(input_of(b));
-    for (EView v : {EView::READ, EView::LIST, EView::DETAIL})
+    for (EView v : {EView::READ, EView::LIST, EView::DETAIL, EView::CONFIRM})
       for (const Keyed &k : keys_of(L, v, L.rows)) {
         CHECK(inside_room(L, k.r));
         CHECK(!k.r.empty());
@@ -207,7 +211,7 @@ TEST(keys_are_seven_millimetres_where_the_glass_has_them) {
     CHECK(L.detail_fits);
     CHECK(L.detail_key_h >= b.mm7);
     CHECK(L.detail_key_h <= input_of(b).key_max_h);   // never taller than 12 mm: the room left over stays empty
-    for (EView v : {EView::READ, EView::LIST, EView::DETAIL})
+    for (EView v : {EView::READ, EView::LIST, EView::DETAIL, EView::CONFIRM})
       for (const Keyed &k : keys_of(L, v, L.rows)) {
         CHECK(k.r.h >= b.mm7);
         CHECK(k.r.w >= b.mm7);
@@ -294,13 +298,14 @@ TEST(zones_partition_every_view_on_every_board) {
     check_partition(L, EView::LIST, 1);   // a page with one row: the others are empty
     check_partition(L, EView::LIST, 0);   // no bands
     check_partition(L, EView::DETAIL, 0);
+    check_partition(L, EView::CONFIRM, 0);
   }
 }
 
 TEST(the_centre_of_every_key_hits_that_key) {
   for (const Board &b : BOARDS) {
     const PadLayout L = make_pad(input_of(b));
-    for (EView v : {EView::READ, EView::LIST, EView::DETAIL})
+    for (EView v : {EView::READ, EView::LIST, EView::DETAIL, EView::CONFIRM})
       for (const Keyed &k : keys_of(L, v, L.rows)) {
         const EZone z = pad_zone_at(L, v, L.rows, k.r.x + k.r.w / 2, k.r.y + k.r.h / 2);
         CHECK(z == k.z);
@@ -436,6 +441,380 @@ TEST(time_keys_move_by_the_steps_of_the_plan) {
   CHECK(!time_key(EZ::SAVE, k));
   CHECK(!time_key(EZ::NONE, k));
   CHECK(!time_key(EZ::ROW, k));
+}
+
+
+// ------------------------------------------------------------------------------------------------ the confirmation of Delete
+
+static const Board CYD320 = {"cyd320", 320, 240, 40, 17, 3, 5, true};   // the 320x240 glass at its own 7 mm
+
+static std::vector<Board> confirm_boards() {
+  std::vector<Board> v(std::begin(BOARDS), std::end(BOARDS));
+  v.push_back(CYD320);
+  return v;
+}
+
+TEST(confirm_keys_are_big_apart_and_inside_the_room) {
+  for (const Board &b : confirm_boards()) {
+    const PadInput in = input_of(b);
+    const PadLayout L = make_pad(in);
+    CHECK(!L.conf_no.empty() && !L.conf_yes.empty());
+    CHECK(inside_room(L, L.conf_no) && inside_room(L, L.conf_yes));
+    CHECK(L.conf_key_h >= b.mm7);                   // 7 mm like the other keys, on every board of the bench
+    CHECK(L.conf_no.h == L.conf_key_h && L.conf_yes.h == L.conf_key_h);
+    CHECK(L.conf_no.w >= b.mm7 && L.conf_yes.w >= b.mm7);
+    CHECK(L.conf_no.x == 0 && L.conf_yes.right() == b.w);        // one at the left edge, one at the right
+    CHECK(L.conf_no.right() < L.conf_yes.x);
+    CHECK(L.conf_yes.x - L.conf_no.right() == L.conf_gap);        // the gap between them is the wide one
+    CHECK(L.conf_gap >= in.wide_gap || L.conf_gap == b.w / 3);
+    CHECK(L.conf_gap >= 4 * L.gap);
+    CHECK(!L.conf_small);
+    CHECK(L.conf_no.w == L.conf_yes.w);
+  }
+}
+
+TEST(confirm_gap_defaults_to_four_gaps_and_never_exceeds_a_third) {
+  PadInput in = input_of(BOARDS[1]);
+  in.wide_gap = 0;
+  for (int gap : {1, 2, 3, 6}) {
+    in.gap = gap;
+    const PadLayout L = make_pad(in);
+    CHECK(L.conf_gap >= 4 * gap && L.conf_gap <= 4 * gap + 1);
+  }
+  in.gap = 3;
+  in.wide_gap = 100000;   // absurd: a third of the width at most
+  const PadLayout T = make_pad(in);
+  CHECK(T.conf_gap <= in.w / 3 + 1);
+  CHECK(T.conf_no.w >= 1 && T.conf_yes.w >= 1);
+  in.w = 12;              // so narrow that nothing fits: still no overlap, no negative size
+  in.wide_gap = 0;
+  const PadLayout N = make_pad(in);
+  CHECK(N.conf_no.w >= 1 && N.conf_yes.w >= 1 && N.conf_no.right() <= N.conf_yes.x);
+}
+
+TEST(confirm_does_not_stand_where_delete_stood) {
+  for (const Board &b : confirm_boards()) {
+    const PadLayout L = make_pad(input_of(b));
+    // Confirm is not under the finger that tapped Delete, even with the half gap the zones add
+    const int g = L.gap / 2;
+    CHECK(L.conf_yes.x > L.del.right() + g);
+    CHECK(L.conf_yes.x > L.del.right() + L.gap);
+    // the centre of Delete, tapped again in the confirmation, is not Confirm (Cancel is the safe answer)
+    const EZone same = pad_zone_at(L, EView::CONFIRM, 0, L.del.x + L.del.w / 2, L.del.y + L.del.h / 2);
+    CHECK(same.kind != EZ::CONFIRM_YES);
+    // and no point of Delete's own zone is in Confirm's
+    for (int y = L.del.y; y < L.del.bottom(); ++y)
+      for (int x = L.del.x; x < L.del.right(); ++x) CHECK(pad_zone_at(L, EView::CONFIRM, 0, x, y).kind != EZ::CONFIRM_YES);
+  }
+}
+
+TEST(confirm_zones_never_overlap_and_the_gap_is_dead) {
+  for (const Board &b : confirm_boards()) {
+    const PadLayout L = make_pad(input_of(b));
+    const int y = L.conf_no.y + L.conf_no.h / 2;
+    int cancel = 0, confirm = 0, none = 0;
+    for (int x = 0; x < b.w; ++x) {
+      const EZone z = pad_zone_at(L, EView::CONFIRM, 0, x, y);
+      if (z.kind == EZ::CONFIRM_NO) ++cancel;
+      else if (z.kind == EZ::CONFIRM_YES) ++confirm;
+      else ++none;
+    }
+    CHECK(cancel > 0 && confirm > 0);
+    CHECK(none >= L.conf_gap - L.gap);              // the middle of the gap is nobody's
+    // the zones are in order: all of Cancel before the first pixel of Confirm
+    int last_no = -1, first_yes = b.w;
+    for (int x = 0; x < b.w; ++x) {
+      const EZone z = pad_zone_at(L, EView::CONFIRM, 0, x, y);
+      if (z.kind == EZ::CONFIRM_NO) last_no = x;
+      if (z.kind == EZ::CONFIRM_YES) first_yes = std::min(first_yes, x);
+    }
+    CHECK(last_no < first_yes);
+    CHECK(first_yes - last_no >= L.conf_gap - L.gap);
+    // the midpoint between the keys is dead
+    CHECK(pad_zone_at(L, EView::CONFIRM, 0, b.w / 2, y).kind == EZ::NONE);
+  }
+}
+
+TEST(confirm_edges_of_the_keys) {
+  const PadLayout L = make_pad(input_of(BOARDS[1]));
+  const Rect &n = L.conf_no, &y = L.conf_yes;
+  CHECK(pad_zone_at(L, EView::CONFIRM, 0, n.x, n.y).kind == EZ::CONFIRM_NO);
+  CHECK(pad_zone_at(L, EView::CONFIRM, 0, n.right() - 1, n.bottom() - 1).kind == EZ::CONFIRM_NO);
+  CHECK(pad_zone_at(L, EView::CONFIRM, 0, y.x, y.y).kind == EZ::CONFIRM_YES);
+  CHECK(pad_zone_at(L, EView::CONFIRM, 0, y.right() - 1, y.bottom() - 1).kind == EZ::CONFIRM_YES);
+  // the last row of pixels under the keys is the room's edge: still the key (h is the end of the room)
+  CHECK(y.bottom() <= L.in.h);
+  // above the keys and the text there is nothing to tap
+  CHECK(pad_zone_at(L, EView::CONFIRM, 0, y.x + 3, y.y - L.gap - 2).kind == EZ::NONE);
+  CHECK(pad_zone_at(L, EView::CONFIRM, 0, 5, 0).kind == EZ::NONE);
+  // the keys of other views are not keys here
+  CHECK(pad_zone_at(L, EView::CONFIRM, 0, L.save.x + 3, L.save.y + 3).kind == EZ::NONE || L.save.y + 3 >= y.y);
+  CHECK(pad_zone_at(L, EView::CONFIRM, 0, -1, -1).kind == EZ::NONE);
+  CHECK(pad_zone_at(L, EView::CONFIRM, 0, L.in.w, y.y + 2).kind == EZ::NONE);
+  CHECK(pad_zone_at(L, EView::CONFIRM, 0, y.x + 2, L.in.h).kind == EZ::NONE);
+}
+
+TEST(confirm_text_lines_stand_over_the_keys) {
+  for (const Board &b : confirm_boards()) {
+    const PadLayout L = make_pad(input_of(b));
+    CHECK(L.conf_lines >= 2);   // the band and one more line always have room
+    CHECK(L.conf_lines <= 3);
+    for (int i = 0; i < L.conf_lines; ++i) {
+      const Rect &r = L.conf_line[i];
+      CHECK(inside_room(L, r));
+      CHECK(r.bottom() <= L.conf_no.y);                       // never over a key
+      if (i > 0) CHECK(r.y >= L.conf_line[i - 1].bottom());   // never over each other
+    }
+  }
+}
+
+TEST(confirm_on_a_short_glass_makes_the_keys_smaller_and_keeps_two_lines) {
+  PadInput in = input_of(BOARDS[0]);
+  in.h = 70;
+  const PadLayout L = make_pad(in);
+  CHECK(L.conf_small);
+  CHECK(L.conf_key_h < in.key_h);
+  CHECK(L.conf_lines >= 2);
+  CHECK(inside_room(L, L.conf_no) && inside_room(L, L.conf_yes));
+  CHECK(L.conf_line[1].bottom() <= L.conf_no.y);
+  // absurdly short: nothing falls outside, nothing is empty
+  in.h = 20;
+  const PadLayout S = make_pad(in);
+  CHECK(!S.conf_no.empty() && inside_room(S, S.conf_no) && inside_room(S, S.conf_yes));
+}
+
+TEST(confirm_grid_of_geometries_keeps_the_invariants) {
+  for (int w = 120; w <= 800; w += 37)
+    for (int h = 60; h <= 520; h += 29)
+      for (int gap : {1, 2, 3, 5}) {
+        PadInput in = input_of(BOARDS[1]);
+        in.w = w;
+        in.h = h;
+        in.gap = gap;
+        in.wide_gap = (w % 3) * 20;
+        const PadLayout L = make_pad(in);
+        CHECK(!L.conf_no.empty() && !L.conf_yes.empty());
+        CHECK(inside_room(L, L.conf_no) && inside_room(L, L.conf_yes));
+        CHECK(L.conf_no.right() < L.conf_yes.x);
+        // zones: no pixel in both, Cancel's before Confirm's
+        const int y = L.conf_no.y + L.conf_no.h / 2;
+        int last_no = -1, first_yes = w + 1;
+        for (int x = 0; x < w; ++x) {
+          const EZone z = pad_zone_at(L, EView::CONFIRM, 0, x, y);
+          if (z.kind == EZ::CONFIRM_NO) last_no = x;
+          if (z.kind == EZ::CONFIRM_YES) first_yes = std::min(first_yes, x);
+        }
+        CHECK(last_no < first_yes);
+        if (L.conf_lines > 0) CHECK(L.conf_line[L.conf_lines - 1].bottom() <= L.conf_no.y);
+      }
+}
+
+TEST(confirm_check_partition_on_odd_sizes) {
+  for (int w : {101, 160, 333}) {
+    PadInput in = input_of(BOARDS[2]);
+    in.w = w;
+    in.h = 150;
+    in.gap = 5;   // odd gap: half of it rounds down
+    check_partition(make_pad(in), EView::CONFIRM, 0);
+  }
+}
+
+// ---- the guard and what a tap does
+
+TEST(confirm_ignores_the_first_600_ms_but_cancel_works_at_once) {
+  CHECK(CONFIRM_GUARD_MS == 600);
+  CHECK(confirm_tap(EZ::CONFIRM_NO, 1000, 1000) == ConfirmTap::CANCEL);
+  CHECK(confirm_tap(EZ::CONFIRM_NO, 1001, 1000) == ConfirmTap::CANCEL);
+  CHECK(confirm_tap(EZ::CONFIRM_YES, 1000, 1000) == ConfirmTap::NONE);
+  CHECK(confirm_tap(EZ::CONFIRM_YES, 1599, 1000) == ConfirmTap::NONE);
+  CHECK(confirm_tap(EZ::CONFIRM_YES, 1600, 1000) == ConfirmTap::DELETE);
+  CHECK(confirm_tap(EZ::CONFIRM_YES, 90000, 1000) == ConfirmTap::DELETE);
+  // the clock of the chip wraps: 300 ms across the wrap is still too soon, 700 ms is not
+  CHECK(confirm_tap(EZ::CONFIRM_YES, 299, 0xFFFFFFFFu - 0) == ConfirmTap::NONE);
+  CHECK(confirm_tap(EZ::CONFIRM_YES, 0xFFFFFF00u + 500, 0xFFFFFF00u) == ConfirmTap::NONE);
+  CHECK(confirm_tap(EZ::CONFIRM_YES, 699u - 1u, 0xFFFFFFFFu - 0) == ConfirmTap::DELETE);
+  CHECK(confirm_tap(EZ::CONFIRM_YES, 0xFFFFFF00u + 700, 0xFFFFFF00u) == ConfirmTap::DELETE);
+  // no other zone means anything here
+  for (EZ z : {EZ::NONE, EZ::OPEN, EZ::ROW, EZ::DELETE, EZ::SAVE, EZ::BACK, EZ::ADD, EZ::MODE})
+    CHECK(confirm_tap(z, 99999, 0) == ConfirmTap::NONE);
+}
+
+TEST(confirm_lines_have_a_priority) {
+  // not shared: question + band
+  ConfirmLines c = confirm_lines(3, false);
+  CHECK(c.question && c.band && !c.warning);
+  c = confirm_lines(2, false);
+  CHECK(c.question && c.band && !c.warning);
+  c = confirm_lines(1, false);
+  CHECK(!c.question && c.band && !c.warning);
+  c = confirm_lines(0, false);
+  CHECK(!c.question && !c.band && !c.warning);
+  // shared: question + band + warning; the warning goes before the question
+  c = confirm_lines(3, true);
+  CHECK(c.question && c.band && c.warning);
+  c = confirm_lines(2, true);
+  CHECK(!c.question && c.band && c.warning);
+  c = confirm_lines(1, true);
+  CHECK(!c.question && c.band && !c.warning);
+  c = confirm_lines(-4, true);
+  CHECK(!c.question && !c.band && !c.warning);
+  c = confirm_lines(99, true);
+  CHECK(c.question && c.band && c.warning);
+  // a board that shows only the two lines still says "shared"
+  for (const Board &b : confirm_boards()) {
+    const PadLayout L = make_pad(input_of(b));
+    CHECK(confirm_lines(L.conf_lines, true).warning);
+    CHECK(confirm_lines(L.conf_lines, true).band);
+  }
+}
+
+TEST(the_warning_is_for_programs_of_more_than_one_room) {
+  CHECK(!confirm_shared(-1));
+  CHECK(!confirm_shared(0));
+  CHECK(!confirm_shared(1));
+  CHECK(confirm_shared(2));
+  CHECK(confirm_shared(3));
+  CHECK(confirm_shared(40));
+}
+
+TEST(band_summary_joins_the_parts) {
+  CHECK_STR(band_summary("08:30-10:30", "Heating", "21.5\xC2\xB0"), "08:30-10:30 Heating 21.5\xC2\xB0");
+  CHECK_STR(band_summary("00:00-06:00", "Off", ""), "00:00-06:00 Off");
+  CHECK_STR(band_summary("08:30-10:30", "", "21.5"), "08:30-10:30 21.5");
+  CHECK_STR(band_summary("", "Heat", "20"), "Heat 20");
+  CHECK_STR(band_summary("", "", ""), "");
+}
+
+TEST(the_words_of_the_confirmation_have_long_and_short_forms) {
+  const ConfirmWords w = confirm_words();
+  CHECK_STR(w.question.full, "confirm_q");
+  CHECK_STR(w.question.shortly, "confirm_q_s");
+  CHECK_STR(w.shared.full, "confirm_shared");
+  CHECK_STR(w.shared.shortly, "confirm_shared_s");
+  CHECK_STR(w.yes, "confirm_yes");
+  CHECK_STR(w.no, "confirm_no");
+  CHECK(std::strcmp(w.question.full, w.question.shortly) != 0);
+  CHECK(std::strcmp(w.shared.full, w.shared.shortly) != 0);
+}
+
+// ---- may Delete ask, and when does the question close
+
+static EditInput gate_input(const std::vector<std::vector<double>> &rows, const char *info = "mon;3;r1;") {
+  EditInput in;
+  for (const auto &r : rows) {   // start, end, mode, temp, flags
+    in.lists.start.push_back(r[0]);
+    in.lists.end.push_back(r[1]);
+    in.lists.mode.push_back(r[2]);
+    in.lists.temp.push_back(r[3]);
+    in.flags.push_back(r[4]);
+    in.preset.push_back("");
+  }
+  in.info = parse_edit_info(info);
+  in.info.n = (int) rows.size();
+  in.program_name = "Casa";
+  return in;
+}
+
+TEST(delete_gate_says_yes_for_a_plain_band_and_why_not_otherwise) {
+  EditModel m;
+  m.load(gate_input({{0, 360, 1, 17, 0}, {360, 480, 1, 21, 0}, {480, 1440, 0, -100, 1}}));
+  CHECK(!delete_gate(m).ok);                 // nothing selected: no, and nothing to say
+  CHECK(!delete_gate(m).why.any());
+  CHECK(m.select(1));
+  DeleteGate g = delete_gate(m);
+  CHECK(g.ok);
+  CHECK(!g.why.any());
+  CHECK(m.size() == 2);                      // the gate changes nothing
+  CHECK(m.selected() == 1);
+  m.set_frozen(true);                        // a save under way
+  g = delete_gate(m);
+  CHECK(!g.ok);
+  CHECK_STR(g.why.full, "msg_edit_blocked");
+  m.set_frozen(false);
+  CHECK(delete_gate(m).ok);
+  CHECK(m.select(5) == false);
+  CHECK(delete_gate(m).ok);                  // the failed select left the old one
+  m.deselect();
+  CHECK(!delete_gate(m).ok);
+}
+
+TEST(delete_gate_refuses_a_locked_band_and_a_day_with_one) {
+  EditModel m;
+  m.load(gate_input({{0, 360, 1, 17, 2}, {360, 480, 1, 21, 0}, {480, 1440, 0, -100, 1}}));
+  CHECK(m.select(0));
+  DeleteGate g = delete_gate(m);
+  CHECK(!g.ok);
+  CHECK_STR(g.why.full, "msg_locked");       // this band is locked
+  CHECK(m.select(1));
+  g = delete_gate(m);
+  CHECK(!g.ok);
+  CHECK_STR(g.why.full, "block_locked");     // another band is locked: the day cannot be saved from here
+}
+
+TEST(delete_gate_refuses_damaged_data) {
+  EditModel m;
+  EditInput in = gate_input({{0, 360, 1, 17, 0}, {300, 480, 1, 21, 0}});   // overlapping: repaired and flagged
+  m.load(in);
+  CHECK(m.damaged());
+  m.select(0);
+  DeleteGate g = delete_gate(m);
+  CHECK(!g.ok);
+  CHECK_STR(g.why.full, "block_damaged");
+  EditModel n;
+  EditInput cut = gate_input({{0, 360, 1, 17, 0}});
+  cut.info.n = 9;                            // the core cut the lists: never delete from a cut day
+  n.load(cut);
+  CHECK(n.damaged());
+  n.select(0);
+  CHECK(!delete_gate(n).ok);
+}
+
+TEST(only_silence_keeps_the_question_open) {
+  CHECK(confirm_survives(EditEvent::NONE));
+  for (EditEvent e : {EditEvent::RELOADED, EditEvent::CHANGED_ELSEWHERE, EditEvent::DAY_CHANGED, EditEvent::SAVED, EditEvent::SAVE_FAILED})
+    CHECK(!confirm_survives(e));
+}
+
+TEST(the_session_events_that_close_the_question_are_the_ones_the_session_raises) {
+  // The question is asked on the selected band of an open session; each kind of news from the sensor must give an event that
+  // closes it, and a sensor that says the same thing must not.
+  const EditInput base = gate_input({{0, 360, 1, 17, 0}, {360, 480, 1, 21, 0}, {480, 1440, 0, -100, 1}});
+  auto opened = [&](EditSession &s) {
+    s.open(base, SetpointRange(), 3, "climate.x");
+    s.model().select(1);
+  };
+  {  // the same data again (the temperature moved): the question stays
+    EditSession s;
+    opened(s);
+    CHECK(confirm_survives(s.on_state(base, 10)));
+    CHECK(s.model().selected() == 1);
+  }
+  {  // another revision of the program: closes
+    EditSession s;
+    opened(s);
+    EditInput n = gate_input({{0, 360, 1, 17, 0}, {360, 480, 1, 21, 0}, {480, 1440, 0, -100, 1}}, "mon;3;r2;");
+    CHECK(!confirm_survives(s.on_state(n, 10)));
+  }
+  {  // the band under the question moved elsewhere: closes
+    EditSession s;
+    opened(s);
+    EditInput n = gate_input({{0, 360, 1, 17, 0}, {360, 450, 1, 21, 0}, {450, 1440, 0, -100, 1}});
+    CHECK(!confirm_survives(s.on_state(n, 10)));
+  }
+  {  // midnight: another day closes it
+    EditSession s;
+    opened(s);
+    EditInput n = gate_input({{0, 360, 1, 17, 0}}, "tue;3;r1;");
+    CHECK(!confirm_survives(s.on_state(n, 10)));
+  }
+  {  // unreadable edit_info: the session does not even answer (the panel is hidden by the card)
+    EditSession s;
+    opened(s);
+    EditInput n = base;
+    n.info = parse_edit_info("garbage");
+    CHECK(confirm_survives(s.on_state(n, 10)));
+    CHECK(!panel_allowed(true, TileView{}, n.info));
+  }
 }
 
 // ------------------------------------------------------------------------------------------------ the texts

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.1
+- **Delete asks first.** The key Delete of the band no longer deletes and saves at once: it opens a question inside the card
+  with the band ("08:30-10:30 Heating 21.5°"), a warning "Shared program: N rooms" when the program has more than one
+  room, and two big keys (7 mm or more): **Cancel** (left) and **Confirm** (right, a wide gap apart). Cancel goes back to the
+  band unchanged and sends nothing; Confirm does what Delete did before (deletes and saves with the revision seen; if it
+  fails, the list shows the band again).
+- Against a stray double tap: Confirm is not where Delete is, and it ignores taps for 600 ms after the question opens.
+- The question closes without sending when the room can no longer be commanded (paused, unavailable, no program, unreadable
+  `edit_info`) or when the bands change elsewhere, the day changes or a save answer arrives. Damaged data, a locked band or
+  a save under way stop Delete before it asks. It fits the small 320x240 boards.
+- New texts (English and Italian): `confirm_q`, `confirm_shared`, `confirm_yes`, `confirm_no` and their short forms.
+- Needs the same integration as 0.2.0 (0.3.2 or later). No new permission.
+
 ## 0.2.0
 - **Edit the bands from the display.** The card of the bands has a key **Edit** (new option **Allow editing the bands**, on
   by default). It lists the user bands of today (the automatic "off" bands are the integration's, never a row), with pages

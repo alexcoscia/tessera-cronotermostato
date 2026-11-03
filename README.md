@@ -89,7 +89,15 @@ What it does:
 3. **Save** sends one `cronotermostato.set_day` with `climate_entity_id`, the day it saw (`day_kind`), the whole list of
    bands (`bands`, as text) and the revision of the program it saw (`base_revision`). The key says **...** while it waits,
    **Saved** (and the list comes back with the new bands) or **Error** / the reason, or **Not saved** after 5 seconds
-   without an answer. **Delete** removes the band and saves at once. **Back** drops what was changed and not saved.
+   without an answer. **Back** drops what was changed and not saved.
+4. **Delete** asks first. It opens a question inside the card (not a popup) with the band ("08:30-10:30 Heating 21.5°"),
+   "Shared program: 3 rooms" when the program is used by more than one room, and two big keys: **Cancel** at the left and
+   **Confirm** at the right, a thumb apart. Nothing is sent by Delete itself. **Cancel** goes back to the band as it was.
+   **Confirm** deletes the band and saves at once (one `set_day`, with the revision seen); if that fails the list shows the
+   band again. Two things guard against a stray tap: Confirm does not stand where Delete stood, and it ignores taps for
+   the first 600 ms after the question opens (Cancel works at once). The question closes without sending if the room can
+   no longer be commanded (paused, unavailable, no program, `edit_info` unreadable) or if the bands change elsewhere or the
+   day changes while it is open; damaged data, a locked band or a save under way stop Delete before it asks.
 
 Good to know:
 
@@ -171,8 +179,9 @@ bands: the editor draws them over each other, the tile trims the later one (a de
 `node tools/gen_parity.mjs [path of the integration repository]` (default `../cronotermostato`).
 
 The touch flow of the bench (`tools/bench_flow.py`) opens the card of the first room tile with real taps, enters the
-editing, adds a band, saves, answers the way the integration does (new bands, a refusal, a change made elsewhere), deletes,
-waits for the timeout and opens a tile whose option `edit` is off. It checks the `cronotermostato.set_day` call (day,
+editing, adds a band, saves, answers the way the integration does (new bands, a refusal, a change made elsewhere), deletes
+(Delete -> Cancel sends nothing, an early Confirm sends nothing, Confirm sends; a change made elsewhere or a pause while the
+question is open closes it without sending), waits for the timeout and opens a tile whose option `edit` is off. It checks the `cronotermostato.set_day` call (day,
 revision, text of the bands) and photographs every step, light and dark, into `.preview-flow/<board>/`. It needs the bench
 of `tessera-plugins` (set up once with `preview.py --setup`) and its Python:
 

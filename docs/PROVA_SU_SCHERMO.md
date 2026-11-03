@@ -123,7 +123,7 @@ Dopo ogni prova guarda anche lo Scheduler: non deve essere cambiato nulla nelle 
   e riavvia HA. Gli attributi `today_*` in più non danneggiano nulla.
 - **Scheduler:** non è stato toccato, continua a comandare i suoi termostati.
 
-## 7. Prova della modifica delle fasce (plugin 0.2.0, integrazione 0.3.2)
+## 7. Prova della modifica delle fasce (plugin 0.2.1, integrazione 0.3.2)
 
 **ATTENZIONE: la modifica cambia un PROGRAMMA, e un programma è condiviso da tutte le stanze che lo usano.** Si prova SOLO
 con un **programma di prova assegnato alla sola stanza `climate.termostato_casa`**. Non si modifica dal display un
@@ -150,13 +150,16 @@ Il tile deve avere l'opzione **Consenti la modifica delle fasce** attiva (lo è 
 | **Salva** | Un solo `cronotermostato.set_day` (HA: Strumenti per sviluppatori → Eventi/log, o il log del dispositivo `Sent service=cronotermostato.set_day`). Il tasto fa `...`, poi **Salvato** e si torna all'elenco con le fasce nuove; in HA l'editor mostra le stesse fasce. Il sensore cambia `program_revision` (campo 3 di `edit_info`). |
 | Errore | Se HA rifiuta il tasto dice il motivo breve (Errore / Cambiato / Fuori limite...) e in `edit_info` (ultimo campo) compare il codice (`stale_day`, `conflict`, `day_locked`, `invalid_bands`, `temp_range`, `invalid_program`). Senza risposta in 5 s: **Non salvato**. |
 | Cambiato altrove | Con la lista aperta, cambia una fascia dello stesso programma dall'editor di HA: la lista si ricarica e dice "Cambiato altrove"; le modifiche non salvate si perdono. |
-| Elimina | Toglie la fascia e salva subito. |
+| Elimina | NON toglie niente e non invia niente: apre la **conferma** dentro la card, con la fascia ("08:30-10:30 Riscaldamento 21,5°"), "Programma condiviso da N stanze" se il programma ha più di una stanza (nella prova deve essere 1: l'avviso non c'è) e due tasti grandi: **Annulla** a sinistra, **Conferma** a destra, ben distanziati. |
+| **Annulla** | Torna al dettaglio com'era; nessun invio (log del dispositivo: nessun `Sent service=cronotermostato.set_day`). |
+| **Conferma** | Toglie la fascia e salva subito (un `set_day`); torna all'elenco. Conferma non sta dove stava Elimina e ignora i tocchi per i primi 600 ms: prova a toccare Elimina due volte di fila, velocemente: il secondo tocco non deve confermare. Annulla funziona subito. |
+| Conferma e novità | Con la conferma aperta cambia la stessa fascia dall'editor di HA, oppure metti la stanza in pausa: la conferma si chiude da sola e non invia niente (con la pausa la card torna in sola lettura). Il tasto Indietro/freccia della card, a conferma aperta, vale Annulla. |
 | Indietro | Dal dettaglio all'elenco, buttando le modifiche non salvate; dall'elenco chiude la card (freccia in alto a sinistra). |
 | Fascia bloccata | Una fascia con preset/temperatura che il display non sa riscrivere si vede, è marcata "Bloccata" e non si apre; un giorno che ne ha una non si salva da qui. |
 | Mezzanotte | Se passa mezzanotte con l'elenco aperto: "Nuovo giorno", si ricarica il giorno nuovo. |
 | Opzione spenta | Spegni **Consenti la modifica delle fasce** nell'ispettore: la card torna in sola lettura (nessun tasto Modifica). |
 
-Da annotare: le zone di tocco (7 mm: comode?), quanto passa fra Salva e "Salvato", se i passi 15 min/1 h bastano, e su CYD/
+Da annotare: le zone di tocco (7 mm: comode?), se Conferma e Annulla (distanza, 600 ms di attesa su Conferma) sono comodi o fastidiosi, quanto passa fra Salva e "Salvato", se i passi 15 min/1 h bastano, e su CYD/
 Hosyond se l'elenco a 3-4 righe per pagina è usabile. Non è stata misurata la memoria sul chip: se lo schermo si riavvia
 o perde il Wi-Fi aprendo la modifica, annotalo (e il giorno con più fasce).
 

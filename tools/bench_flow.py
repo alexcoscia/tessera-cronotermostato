@@ -2,8 +2,9 @@
 
 It runs the normal bench of tessera-plugins on this plugin and then, on the screen's own grid, drives real taps through the
 firmware's touch filter, once in the light look and once in the dark one: it opens the card of a room tile, enters the editing, adds a band, saves, answers the way the
-integration would (new bands, a refusal, a change made elsewhere), deletes, waits for the timeout and opens a tile whose
-option `edit` is off. Each step is photographed (`flow-<step>-<light|dark>.png`), audited,
+integration would (new bands, a refusal, a change made elsewhere), deletes (Delete asks first: Cancel sends nothing, a tap on
+Confirm within 600 ms sends nothing, Confirm sends; and a change made elsewhere or a room that goes to pause while the
+question is open closes it without sending), waits for the timeout and opens a tile whose option `edit` is off. Each step is photographed (`flow-<step>-<light|dark>.png`), audited,
 and the checks are printed as `FLOW <screen> <look> PASS|FAIL <what>`; the exit status is 1 when a check fails.
 
 The keys are found from the line `CRONOPAD view=... name:x,y,w,h ...` the card logs when what it shows changes.
@@ -59,7 +60,7 @@ def pad_now(self, since=0):
 
 
 async def wait_pad(self, view, since, timeout=4.0):
-    """Until the card has logged its keys for `view` (0 read, 1 list, 2 detail); the keys then."""
+    """Until the card has logged its keys for `view` (0 read, 1 list, 2 detail, 3 the question before a Delete); the keys then."""
     end = asyncio.get_running_loop().time() + timeout
     while asyncio.get_running_loop().time() < end:
         v, page, state, keys = pad_now(self, since)
@@ -228,18 +229,51 @@ async def flow(self, app, examples, grid, theme):
     check(self, page is not None, 'after the answer the card shows the list again')
     await shots(self, '6-saved')
 
-    # 6. Delete: the band just added (row 2 of page 0): delete and save at once
+    # 6. Delete: the band just added (row 2 of page 0). Delete only asks; Cancel sends nothing; Confirm deletes and saves.
     await asyncio.sleep(0.8)
     start = len(self.lines)
     await press(self, 'row2')
     page, state, keys = await wait_pad(self, 2, start)
     check(self, 'del' in keys, 'a tap on a row opens the band')
-    sent = await press(self, 'del', 0.9)
+    detail_keys = dict(keys)
+    start = len(self.lines)
+    sent = await press(self, 'del', 0.5)
+    check(self, not sent, 'Delete sends nothing: it asks first')
+    page, state, keys = await wait_pad(self, 3, start)
+    check(self, 'cfm-yes' in keys and 'cfm-no' in keys, f'the question shows Confirm and Cancel (keys {sorted(keys)})')
+    await shots(self, '7a-confirm')
+    if 'cfm-yes' in keys and 'cfm-no' in keys and 'del' in detail_keys:
+        yx, yy, yw, yh = keys['cfm-yes']
+        nx, ny, nw, nh = keys['cfm-no']
+        dx, dy, dw, dh = detail_keys['del']
+        check(self, nx + nw < yx, 'Cancel is at the left, Confirm at the right')
+        check(self, yx - (nx + nw) >= 8, f'a gap of {yx - (nx + nw)} px between Cancel and Confirm')
+        check(self, yx >= dx + dw, 'Confirm does not stand where Delete stood')
+        mm7 = detail_keys['del'][3]   # Delete is a key of at least 7 mm (or the screen's smallest): the question's keys are not smaller
+        check(self, yh >= min(mm7, 36) and nh >= min(mm7, 36), f'the keys are big enough ({yh}/{nh} px, Delete {mm7} px)')
+    # Cancel: back to the detail, nothing sent
+    start = len(self.lines)
+    sent = await press(self, 'cfm-no', 0.6)
+    check(self, not sent, 'Cancel sends nothing')
+    page, state, keys = await wait_pad(self, 2, start)
+    check(self, 'del' in keys and 'save' in keys, 'Cancel goes back to the detail of the band')
+    # Delete again, and Confirm at once (a double tap): ignored for the first 600 ms
+    start = len(self.lines)
+    await press(self, 'del', 0.05)
+    page, state, keys = await wait_pad(self, 3, start)
+    quick = await press(self, 'cfm-yes', 0.2)
+    check(self, not quick, 'a tap on Confirm in the first 600 ms sends nothing')
+    check(self, pad_now(self)[0] == 3, 'the question is still open after the early tap')
+    await asyncio.sleep(0.9)
+    sent = await press(self, 'cfm-yes', 0.9)
     ok = bool(sent) and len(sent) == 1
-    check(self, ok, 'Delete sends one action')
+    check(self, ok, 'Confirm sends one action')
     if ok:
-        _, f = action_fields(sent[0])
+        service, f = action_fields(sent[0])
+        check(self, service == 'cronotermostato.set_day', f'the action is set_day ({service})')
         check(self, '08:30-10:30' not in f.get('bands', '') and f.get('base_revision') == 'r2', f'the band is gone and base_revision is r2: {f.get("bands")}')
+        check(self, f.get('day_kind') == 'mon' and f.get('climate_entity_id') == 'climate.soggiorno', 'day and room are the ones seen')
+    check(self, pad_now(self)[0] == 1, 'after Confirm the card shows the list')
     await shots(self, '7-deleting')
     base = user_bands_of(room_attrs(values, first))
     await send_values(self, with_bands(values, first, base, 'r3'))
@@ -289,6 +323,45 @@ async def flow(self, app, examples, grid, theme):
     page, state, keys = await wait_pad(self, 0, start)
     check(self, page is not None and 'open' not in keys, 'a paused room: back to the read-only card, no key Edit')
     await shots(self, '11-paused')
+    start = len(self.lines)
+    await send_values(self, values)
+
+    # 10b. the question before a Delete closes, without sending, when the news changes what it asks about
+    page, state, keys = await wait_pad(self, 0, start, timeout=10.0)   # slow boards: the unpaused card may take a while to log
+    check(self, 'open' in keys, 'the card offers Edit again')
+    for what in ('elsewhere', 'paused'):
+        if what == 'elsewhere':   # the second round starts from the list the first one left
+            start = len(self.lines)
+            await press(self, 'open')
+            await wait_pad(self, 1, start)
+        start = len(self.lines)
+        await press(self, 'row0')
+        await wait_pad(self, 2, start)
+        start = len(self.lines)
+        await press(self, 'del', 0.5)
+        page, state, keys = await wait_pad(self, 3, start)
+        check(self, 'cfm-yes' in keys, f'the question is open ({what})')
+        confirm_at = None
+        if 'cfm-yes' in keys:
+            x, y, w, h = keys['cfm-yes']
+            confirm_at = (x + w // 2, y + h // 2)
+        await asyncio.sleep(0.8)   # past the guard: only the news closes it
+        before = len(self.actions)
+        start = len(self.lines)
+        if what == 'elsewhere':
+            await send_values(self, with_bands(values, first, elsewhere, 'r10'))
+            page, state, keys = await wait_pad(self, 1, start)
+            check(self, page is not None, 'a change elsewhere closes the question: the list shows')
+            await shots(self, '11b-confirm-elsewhere')
+        else:
+            await send_values(self, with_bands(values, first, base, 'r10', status='paused'))
+            page, state, keys = await wait_pad(self, 0, start)
+            check(self, page is not None and 'open' not in keys, 'a paused room closes the question: the read-only card shows')
+            await shots(self, '11c-confirm-paused')
+            if confirm_at:   # a late tap where Confirm was does nothing now
+                await self.tap(*confirm_at)
+                await asyncio.sleep(0.5)
+        check(self, len(self.actions) == before, f'nothing was sent when the question closed ({what})')
     await send_values(self, values)
     await self.call('render_close_cards')
     await asyncio.sleep(0.5)

@@ -686,6 +686,7 @@ class DayCard : public tessera::Card {
     pi.open_w = ui::text_width(plugin_->text("edit_open"), Font::BODY) + 2 * ui::px(12);
     pi.key_max_w = ui::mm(26);
     pi.key_max_h = ui::mm(12);
+    pi.wide_gap = ui::mm(8);   // Cancel and Confirm stand a thumb apart
     L_ = make_pad(pi);
 
     // READ: a line over the rows says the program (and a holiday), with the key "Edit" at its right when it can be offered;
@@ -822,6 +823,10 @@ class DayCard : public tessera::Card {
 
   // Back from the detail goes to the list (what was changed and not saved is dropped); from the list the card closes.
   bool on_back() override {
+    if (view_ == EView::CONFIRM) {   // back from the question is "no": the band stays as it was
+      cancel_delete();
+      return true;
+    }
     if (view_ == EView::DETAIL) {
       go_back_to_list();
       return true;
@@ -842,6 +847,15 @@ class DayCard : public tessera::Card {
     if (z.kind != EZ::SAVE) session_.acknowledge();   // the result of a save and a notice go with the next tap
     transient_ = TextKeys();
     EditModel &m = session_.model();
+    if (view_ == EView::CONFIRM) {
+      switch (confirm_tap(z.kind, now, confirm_at_)) {
+        case ConfirmTap::CANCEL: cancel_delete(); break;
+        case ConfirmTap::DELETE: delete_band(now); break;
+        default: break;   // a tap beside the keys, or on Confirm too soon, does nothing
+      }
+      paint();
+      return;
+    }
     if (view_ == EView::LIST) {
       switch (z.kind) {
         case EZ::ROW: {
@@ -876,7 +890,7 @@ class DayCard : public tessera::Card {
           case EZ::MODE: res = m.cycle_mode(); break;
           case EZ::TEMP_M: res = m.step_temp(-1); break;
           case EZ::TEMP_P: res = m.step_temp(+1); break;
-          case EZ::DELETE: delete_band(now); acted = false; break;
+          case EZ::DELETE: ask_delete(now); acted = false; break;
           case EZ::SAVE: save(now); acted = false; break;
           case EZ::BACK: go_back_to_list(); acted = false; break;
           default: acted = false; break;
@@ -1011,6 +1025,17 @@ class DayCard : public tessera::Card {
     ui::set_text(det_[K_BACK].lb, plugin_->text("edit_back"));
     open_ = make_key(parent, L_.open);
     ui::set_text(open_.lb, plugin_->text("edit_open"));
+    // CONFIRM: up to three lines and the two keys.
+    for (int i = 0; i < 3; ++i) {
+      cline_[i] = make_label(parent, L_.conf_line[i].empty() ? Rect{0, 0, w_, body_h} : L_.conf_line[i], LV_TEXT_ALIGN_CENTER);
+      lv_obj_set_x(cline_[i], ui::px(6));
+      lv_obj_set_width(cline_[i], std::max(1, w_ - 2 * ui::px(6)));
+    }
+    cline_w_ = std::max(1, w_ - 2 * ui::px(6));
+    conf_[0] = make_key(parent, L_.conf_no);
+    conf_[1] = make_key(parent, L_.conf_yes);
+    ui::set_text(conf_[0].lb, plugin_->text(confirm_words().no));
+    ui::set_text(conf_[1].lb, plugin_->text(confirm_words().yes));
   }
 
   // --- the views -----------------------------------------------------------------------------------------------
@@ -1065,7 +1090,12 @@ class DayCard : public tessera::Card {
         break;
       default: break;
     }
-    if (view_ == EView::DETAIL && session_.model().selected() < 0) view_ = EView::LIST;
+    // The question is about the band as it was shown: any news closes it, without sending.
+    if (view_ == EView::CONFIRM && !confirm_survives(ev)) {
+      session_.model().deselect();
+      view_ = EView::LIST;
+    }
+    if ((view_ == EView::DETAIL || view_ == EView::CONFIRM) && session_.model().selected() < 0) view_ = EView::LIST;
   }
 
   // Save: once, to Home Assistant. The keys explain what stops it.
@@ -1092,15 +1122,40 @@ class DayCard : public tessera::Card {
     if (!rq.base_revision.empty()) fields["base_revision"] = rq.base_revision;
     if (!tessera::action("cronotermostato.set_day", "", fields)) session_.send_failed();
   }
-  // Delete is delete and save: the list has no Save key. If the day cannot be saved the copy goes back and the key says why.
+  // Delete opens the question; nothing is sent. What stops a delete is said now, not after the question.
+  void ask_delete(uint32_t now) {
+    const DeleteGate gate = delete_gate(session_.model());
+    if (!gate.ok) {
+      if (gate.why.any()) say(gate.why);
+      return;
+    }
+    confirm_at_ = now;
+    view_ = EView::CONFIRM;
+  }
+  void cancel_delete() {
+    view_ = EView::DETAIL;
+    if (session_.model().selected() < 0) view_ = EView::LIST;
+    paint();
+  }
+  // Confirm: delete and save, the list has no Save key. If the day cannot be saved the copy goes back and the key says why.
   void delete_band(uint32_t now) {
     EditModel &m = session_.model();
+    view_ = EView::DETAIL;   // a refusal is said on the detail, as before the question existed
+    const DeleteGate gate = delete_gate(m);
+    if (!gate.ok) {
+      if (gate.why.any()) say(gate.why);
+      if (m.selected() < 0) view_ = EView::LIST;
+      return;
+    }
     const EditResult res = m.remove();
     if (res.msg != Msg::NONE) {
       say(res.msg);
       return;
     }
-    if (!res.changed) return;
+    if (!res.changed) {
+      if (m.selected() < 0) view_ = EView::LIST;
+      return;
+    }
     const SaveBlock block = m.save_block();
     if (block != SaveBlock::NONE) {
       m.load(last_);
@@ -1140,6 +1195,7 @@ class DayCard : public tessera::Card {
     paint_read();
     paint_list();
     paint_detail();
+    paint_confirm();
     log_pad();
   }
 
@@ -1323,6 +1379,59 @@ class DayCard : public tessera::Card {
     }
   }
 
+  // The question before a Delete: the band as it was shown, the warning of a shared program, Cancel and Confirm.
+  void paint_confirm() {
+    if (!edit_option_) return;
+    const bool on = view_ == EView::CONFIRM && session_.opened() && session_.model().selected() >= 0;
+    for (int i = 0; i < 3; ++i) show(cline_[i], on && i < L_.conf_lines);
+    for (int i = 0; i < 2; ++i) show(conf_[i].bg, on);
+    if (!on) return;
+    const EditBand &b = *session_.model().band((size_t) session_.model().selected());
+    const bool shared = confirm_shared(session_.rooms());
+    const ConfirmLines cl = confirm_lines(L_.conf_lines, shared);
+    // The three lines stand top to bottom as question, band, warning; the ones that do not fit are left out.
+    const bool want[3] = {cl.question, cl.band, cl.warning};
+    // Fewer lines than the room holds: the block stays centred in it.
+    const int count = (int) cl.question + (int) cl.band + (int) cl.warning;
+    const int pitch = L_.conf_lines > 1 ? L_.conf_line[1].y - L_.conf_line[0].y : 0;
+    const int y0 = L_.conf_line[0].y + (L_.conf_lines - count) * pitch / 2;
+    int slot = 0;
+    for (int i = 0; i < 3; ++i) {
+      if (!want[i]) continue;
+      if (slot >= L_.conf_lines) break;
+      lv_obj_t *l = cline_[slot];
+      lv_obj_set_y(l, y0 + slot * pitch);
+      std::string text;
+      if (i == 0) {
+        text = pick(confirm_words().question, cline_w_);
+      } else if (i == 1) {
+        text = band_text(b);
+      } else {
+        const TextKeys k = confirm_words().shared;
+        const std::string n = std::to_string(session_.rooms());
+        text = tessera::fill(plugin_->text(k.full), "n", n);
+        if (ui::text_width(text, Font::BODY) > cline_w_) text = fit_cut(tessera::fill(plugin_->text(k.shortly), "n", n), cline_w_, Font::BODY);
+      }
+      ui::set_text(l, text);
+      ui::set_color(l, i == 1 ? theme::INK : theme::MUTED);
+      ++slot;
+    }
+    for (int i = slot; i < 3; ++i) show(cline_[i], false);
+    for (int i = 0; i < 2; ++i) key_state(conf_[i], true);
+  }
+  // "08:30-10:30 Heating 21.5°": the long mode word, else the short one, else cut.
+  std::string band_text(const EditBand &b) const {
+    const std::string time = format_clock(b.start) + dash_ + format_clock(b.end);
+    std::string temp;
+    if (b.mode != Mode::OFF && b.has_temp) temp = format_temp(to_degrees(b.centi), step_, decimal_, true);
+    else if (b.mode != Mode::OFF && !b.preset.empty()) temp = b.preset;
+    for (bool shortly : {false, true}) {
+      const std::string s = band_summary(time, mode_word(plugin_, b.mode, shortly), temp);
+      if (ui::text_width(s, Font::BODY) <= cline_w_) return s;
+    }
+    return fit_cut(band_summary(time, mode_word(plugin_, b.mode, true), temp), cline_w_, Font::BODY);
+  }
+
   // For the bench (docs/PROVA_SU_SCHERMO.md, tools/bench_flow.py): where the keys are, once per change of what is shown.
   void log_pad() {
     const int shown = view_ == EView::LIST ? session_.model().page_rows() : 0;
@@ -1351,6 +1460,9 @@ class DayCard : public tessera::Card {
       add("prev", L_.prev);
       add("next", L_.next);
       add("add", L_.add);
+    } else if (view_ == EView::CONFIRM) {
+      add("cfm-no", L_.conf_no);
+      add("cfm-yes", L_.conf_yes);
     } else {
       static const char *const names[K_COUNT] = {"s-60", "s-15", "s+15", "s+60", "e-60", "e-15", "e+15", "e+60", "mode", "t-", "t+", "del", "save", "back"};
       for (int k = 0; k < K_COUNT; ++k) add(names[k], detail_rect(k));
@@ -1386,7 +1498,10 @@ class DayCard : public tessera::Card {
   lv_obj_t *parent_{};
   lv_obj_t *lhdr_{}, *lempty_{}, *info_{}, *dhdr_{}, *tval_{}, *cap_[2]{};
   ListRow lrow_[PAD_MAX_ROWS];
-  Key foot_[3], det_[K_COUNT], open_;
+  Key foot_[3], det_[K_COUNT], open_, conf_[2];
+  lv_obj_t *cline_[3]{};
+  int cline_w_ = 0;
+  uint32_t confirm_at_ = 0;   // when the question opened (Confirm waits CONFIRM_GUARD_MS)
   int lhdr_w_ = 0, lrow_mode_w_ = 0, lock_w_ = 0;
   bool lrow_short_ = false, lrow_lock_ = false;
   int logged_view_ = -1, logged_page_ = -1, logged_shown_ = -1, logged_state_ = -2;
