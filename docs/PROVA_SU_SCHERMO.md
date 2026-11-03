@@ -27,7 +27,7 @@ comando a un termostato vero senza il via libera di Alex. Lo Scheduler di HA (ch
 
 ## 1. Aggiornare l'integrazione a 0.3.2 su HA di Alex (PRIMA di aggiornare il plugin)
 
-Il tile legge le fasce di oggi (`today_*`) dal sensore di stanza (dalla 0.2.0); la **modifica delle fasce** (plugin 0.2.0) legge anche `edit_info`, `edit_seq`, `edit_n`, `today_flags` e chiama `cronotermostato.set_day`, che esistono dalla **0.3.2**. Con un'integrazione più vecchia il plugin nuovo non offre il tasto Modifica (card in sola lettura), ma non va aggiornato il plugin prima dell'integrazione per non avere un tile che parla a un servizio che non c'è. Copia l'integrazione:
+Il tile legge le fasce di oggi (`today_*`) dal sensore di stanza (dalla 0.2.0); la **modifica delle fasce** (plugin 0.2.0) legge anche `edit_info`, `edit_seq`, `edit_n`, `today_flags` e chiama `cronotermostato.set_day`, che esistono dalla **0.3.2**. Con un'integrazione più vecchia della 0.3.1 il plugin nuovo non offre il tasto Modifica (card in sola lettura); con la 0.3.1 il tasto c'è ma Salva dice sempre "Non modificabile da qui" (manca `edit_n`); la barra poi ha bisogno di `today_flags` per riconoscere le fasce automatiche. Quindi non va aggiornato il plugin prima dell'integrazione per non avere un tile che parla a un servizio che non c'è. Copia l'integrazione:
 
 ```sh
 rsync -rlt --exclude='__pycache__' /home/alexcoscia/cronotermostato/custom_components/cronotermostato/ ~/mnt_hass/homeassistant/custom_components/cronotermostato/

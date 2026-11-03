@@ -11,7 +11,7 @@
   holiday part when today is one) can be edited here; the other days stay in Home Assistant.
 - If the program changes elsewhere while the list is open, the list reloads ("Changed elsewhere"); a locked band is shown
   but not changed, and a day that has one cannot be saved from here.
-- Needs the integration **0.3.2 or later**. With the option off, or with an older integration, the card is the read-only
+- Needs the integration **0.3.2 or later**: update the integration first, then the plugin. With the option off, or with an older integration, the card is the read-only
   list of 0.1.x.
 - The new permission is `cronotermostato.set_day` (the manifest names it).
 

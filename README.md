@@ -11,8 +11,10 @@ the list of today's bands.
 
 - The **cronotermostato integration 0.2.0 or later** in Home Assistant. Older versions do not give the tile today's bands.
   To **edit the bands from the display** (see below) it must be **0.3.2 or later**: the screen reads `edit_info`,
-  `edit_seq`, `edit_n` and `today_flags`, and calls `cronotermostato.set_day`. With an older integration the card stays
-  read-only.
+  `edit_seq`, `edit_n` and `today_flags`, and calls `cronotermostato.set_day`. **Update the integration first, then the
+  plugin** (never the other way round). With an older integration the editing is not offered or cannot save: before 0.3.1
+  the card is read-only; with 0.3.1 it shows the key Edit but Save always says "Not editable from here" (no `edit_n`). The
+  bar also needs `today_flags` to tell the automatic bands apart, so use 0.3.2 with this plugin version.
 - A `climate` entity for the room, and the room's program sensor from the integration, `sensor.<room>_program` (in an
   Italian Home Assistant `sensor.<room>_programma`).
 - The screen must be allowed to call three Home Assistant actions: `cronotermostato.set_manual` and
@@ -103,7 +105,7 @@ Good to know:
 - **Locked bands** (a preset or temperature the display cannot write back, or bands the integration locks) are shown and
   marked **Locked**, never changed, and a day that has one cannot be saved from here: Save says why.
 - A day the display reads incompletely (lists cut by the screen's limit, an old integration) is shown but never saved.
-- At most **16 bands** a day (the integration's limit); **+** says "Full" at 16 and "No room" when no gap is an hour long.
+- At most **16 bands** a day (the limit of the display; the integration accepts up to 24); **+** says "Full" at 16 and "No room" when no gap is an hour long.
 - The tile's option **Allow editing the bands** (default on). Turn it off per tile to keep the card read-only.
 - **Small boards.** On the 2.8-inch CYD there is no room for a title line: the middle of the footer carries the program, the
   number of rooms and the page, or the message of the moment, and the band has no status line: the **Save** key carries
