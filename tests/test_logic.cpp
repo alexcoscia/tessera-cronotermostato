@@ -2096,6 +2096,13 @@ TEST(contrast_helpers) {
   CHECK(std::fabs(contrast_ratio(0x009FE3, 0xFFFFFF) - 2.9709) < 1e-3);
 }
 
+static double lab_hue(uint32_t rgb) {
+  double L, a, b;
+  to_lab(rgb, L, a, b);
+  double h = std::atan2(b, a) * 180.0 / 3.14159265358979323846;
+  return h < 0 ? h + 360.0 : h;
+}
+
 TEST(palette_matches_the_editor) {
   // tests/palette.inc comes from the editor's styles.js (tools/gen_parity.mjs): {look, mode, tint, fill, text}
   struct Row { int look, mode, tint; uint32_t fill, text; };
@@ -2141,28 +2148,33 @@ TEST(tints_of_one_mode_differ_in_both_looks) {
 }
 
 TEST(no_tint_of_a_mode_is_taken_for_another_mode) {
-  // Heat stands apart from cool and off (>= 15). Cool and off are both quiet colours: the palette of the editor keeps the pale blue and
-  // the pale grey of tint 0 only 7.8 apart in the light look (13.6 in the dark one), so cool against off has 7 (the word tells the rest).
+  // Every fill of the palette is at least 15 (CIEDE2000) from every fill of another mode, in both looks: no exception for tint 0 any more.
   for (int dark = 0; dark < 2; ++dark)
     for (int a = 0; a < TINT_COUNT; ++a)
       for (int b = 0; b < TINT_COUNT; ++b) {
         const uint32_t heat = band_colors(Mode::HEAT, a, dark == 1).fill, cool = band_colors(Mode::COOL, b, dark == 1).fill, off = band_colors(Mode::OFF, b, dark == 1).fill;
-        CHECK(delta_e2000(heat, cool) >= 15);
-        CHECK(delta_e2000(heat, off) >= 15);
-        CHECK(delta_e2000(band_colors(Mode::COOL, a, dark == 1).fill, off) >= 7.0);
+        const uint32_t coola = band_colors(Mode::COOL, a, dark == 1).fill;
+        const double d[3] = {delta_e2000(heat, cool), delta_e2000(heat, off), delta_e2000(coola, off)};
+        for (double v : d) {
+          if (v < 15) std::printf("  dark %d tints %d/%d: %.1f\n", dark, a, b, v);
+          CHECK(v >= 15);
+        }
       }
-  // a band without a value (off has none) is always tint 0: against the cool tints a value can give, the grey is >= 7.5 apart
-  for (int dark = 0; dark < 2; ++dark)
-    for (int t = 0; t < TINT_COUNT; ++t) CHECK(delta_e2000(band_colors(Mode::OFF, 0, dark == 1).fill, band_colors(Mode::COOL, t, dark == 1).fill) >= 7.5);
 }
 
 TEST(heat_and_cool_hues_stay_in_their_family) {
-  // tint 0 of heat is warm (red above blue) and of cool is cool (blue above red), in both looks
-  for (int dark = 0; dark < 2; ++dark) {
-    const uint32_t h = band_colors(Mode::HEAT, 0, dark == 1).fill, c = band_colors(Mode::COOL, 0, dark == 1).fill;
-    CHECK((h >> 16 & 0xFF) > (h & 0xFF));
-    CHECK((c & 0xFF) > (c >> 16 & 0xFF));
-  }
+  // heat: amber, orange, red, purple; cool: azure, deep blue, sky blue, aqua (hue angle of CIELAB, as the editor's contrast test does)
+  struct Range { double lo, hi; };
+  const Range heat[TINT_COUNT] = {{55, 95}, {40, 65}, {20, 45}, {300, 340}};
+  const Range cool[TINT_COUNT] = {{255, 290}, {285, 305}, {215, 245}, {175, 205}};
+  for (int dark = 0; dark < 2; ++dark)
+    for (int t = 0; t < TINT_COUNT; ++t) {
+      const double h = lab_hue(band_colors(Mode::HEAT, t, dark == 1).fill), c = lab_hue(band_colors(Mode::COOL, t, dark == 1).fill);
+      if (h < heat[t].lo || h > heat[t].hi) std::printf("  dark %d heat tint %d: hue %.0f\n", dark, t, h);
+      if (c < cool[t].lo || c > cool[t].hi) std::printf("  dark %d cool tint %d: hue %.0f\n", dark, t, c);
+      CHECK(h >= heat[t].lo && h <= heat[t].hi);
+      CHECK(c >= cool[t].lo && c <= cool[t].hi);
+    }
 }
 
 int main() {

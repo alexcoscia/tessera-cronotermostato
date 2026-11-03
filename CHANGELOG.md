@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.4
+- **More different colours.** The palette of 0.2.3 (editor commit 4e529dc) still had tints that looked alike (v0 was a pale wash,
+  gold and olive near each other). It is replaced by the new palette of the editor in Home Assistant (integration commit
+  c6a71a1): every fill is full and saturated, in the light and in the dark look.
+  - Heat: amber, orange, red, purple. Cool: azure, deep blue, sky blue, aqua. Off: four greys.
+  - Light look fills: heat 255,179,0 / 255,122,26 / 214,40,40 / 142,36,170; cool 74,158,255 / 30,63,174 / 143,224,250 / 18,179,173;
+    off 188,194,203 / 125,133,147 / 79,87,102 / 30,35,44. Dark look fills: heat 230,154,0 / 242,106,27 / 198,40,40 / 162,60,192;
+    cool 74,158,255 / 35,71,200 / 155,227,251 / 20,184,176; off 72,80,96 / 118,128,143 / 171,178,191 / 241,243,246.
+  - Text on each fill at least 4.5 to 1 (tested). Used for the bar and the chips of the card, as before.
+- Tests: **every** fill is at least 15 apart (CIEDE2000) from every other fill, also of another mode and tint 0 included; the
+  exception of 7 between cool and off is gone. A new test keeps each tint in its colour family (hue ranges: amber, orange, red,
+  purple; azure, deep blue, sky blue, aqua). `tests/palette.inc` regenerated from the editor's `styles.js`.
+- Works with integration 0.3.2 or later (the data is the same; the editor must have the new palette to show the same colours).
+
 ## 0.2.3
 - **Sharp colours per value.** The shades of 0.2.2 (a share of ink mixed into the colour of the mode) were too faint on the
   panel, as they were in the editor. The tile now takes the **palette of the editor in Home Assistant** (integration commit

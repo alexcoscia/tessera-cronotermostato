@@ -350,10 +350,9 @@ inline RowValue row_value(const std::string &temp, const std::string &preset, in
 
 // The colours of a band: fill and text, by mode, tint (0..TINT_COUNT-1) and look. The same palette as the editor in Home Assistant
 // (integration repository, custom_components/cronotermostato/frontend/lib/day-editing.js, docstring of bandTints; the values are
-// styles.js, --crono-<mode>-v<n>-bg and --crono-<mode>-v<n>): four tints of different HUE for each mode, so values of the same
-// mode can be told apart at a glance (heat: amber, brick red, gold, olive; cool: pale blue, cyan, violet, azure; off: four greys).
-// Tint 0 is the plain colour of the mode, now taken from the palette too (the look's amber and blue of Tone::BUSY / ACCENT were too
-// near gold and azure). Plain constants, in sRGB: no word. tools/gen_parity.mjs writes tests/palette.inc from styles.js, so the
+// styles.js, --crono-<mode>-v<n>-bg and --crono-<mode>-v<n>): four full, saturated tints of different HUE for each mode, so values of the
+// same mode can be told apart at a glance (heat: amber, orange, red, purple; cool: azure, deep blue, sky blue, aqua; off: four greys).
+// Tint 0 is the plain colour of the mode (amber, azure, light grey in the light look), taken from the palette too. Plain constants, in sRGB: no word. tools/gen_parity.mjs writes tests/palette.inc from styles.js, so the
 // tests say when the editor changes a colour. Index [look][mode][tint]: look 0 light, 1 dark; mode 0 heat, 1 cool, 2 off.
 // A colour as 0xRRGGBB from its channels (the palette is written in decimal channels: tools/check.py keeps hex colours out of the tile's code).
 constexpr uint32_t rgb(unsigned r, unsigned g, unsigned b) { return (r << 16) | (g << 8) | b; }
@@ -361,12 +360,12 @@ struct BandColors {
   uint32_t fill, text;
 };
 constexpr BandColors BAND_PALETTE[2][3][TINT_COUNT] = {
-    {{{rgb(253, 232, 189), rgb(122, 67, 0)}, {rgb(240, 139, 116), rgb(79, 18, 4)}, {rgb(236, 210, 46), rgb(64, 54, 0)}, {rgb(163, 191, 85), rgb(31, 44, 2)}},
-     {{rgb(216, 230, 253), rgb(27, 74, 158)}, {rgb(111, 217, 234), rgb(3, 59, 69)}, {rgb(195, 163, 240), rgb(46, 16, 112)}, {rgb(111, 169, 240), rgb(6, 35, 79)}},
-     {{rgb(227, 230, 234), rgb(70, 78, 91)}, {rgb(164, 170, 182), rgb(20, 24, 29)}, {rgb(116, 124, 139), rgb(5, 7, 10)}, {rgb(56, 64, 76), rgb(255, 255, 255)}}},
-    {{{rgb(74, 52, 16), rgb(252, 211, 138)}, {rgb(127, 46, 26), rgb(255, 217, 205)}, {rgb(122, 106, 0), rgb(255, 246, 176)}, {rgb(60, 92, 28), rgb(223, 240, 181)}},
-     {{rgb(20, 48, 94), rgb(179, 205, 255)}, {rgb(10, 92, 112), rgb(192, 243, 252)}, {rgb(107, 79, 214), rgb(255, 255, 255)}, {rgb(42, 111, 192), rgb(255, 255, 255)}},
-     {{rgb(43, 48, 56), rgb(196, 203, 213)}, {rgb(87, 94, 107), rgb(255, 255, 255)}, {rgb(127, 137, 153), rgb(5, 7, 10)}, {rgb(180, 189, 201), rgb(11, 14, 18)}}}};
+    {{{rgb(255, 179, 0), rgb(58, 36, 0)}, {rgb(255, 122, 26), rgb(58, 20, 0)}, {rgb(214, 40, 40), rgb(255, 255, 255)}, {rgb(142, 36, 170), rgb(255, 255, 255)}},
+     {{rgb(74, 158, 255), rgb(2, 31, 61)}, {rgb(30, 63, 174), rgb(255, 255, 255)}, {rgb(143, 224, 250), rgb(6, 48, 63)}, {rgb(18, 179, 173), rgb(0, 48, 46)}},
+     {{rgb(188, 194, 203), rgb(32, 37, 44)}, {rgb(125, 133, 147), rgb(11, 14, 18)}, {rgb(79, 87, 102), rgb(255, 255, 255)}, {rgb(30, 35, 44), rgb(255, 255, 255)}}},
+    {{{rgb(230, 154, 0), rgb(31, 19, 0)}, {rgb(242, 106, 27), rgb(32, 10, 0)}, {rgb(198, 40, 40), rgb(255, 255, 255)}, {rgb(162, 60, 192), rgb(255, 255, 255)}},
+     {{rgb(74, 158, 255), rgb(2, 31, 61)}, {rgb(35, 71, 200), rgb(255, 255, 255)}, {rgb(155, 227, 251), rgb(6, 48, 63)}, {rgb(20, 184, 176), rgb(0, 48, 46)}},
+     {{rgb(72, 80, 96), rgb(255, 255, 255)}, {rgb(118, 128, 143), rgb(5, 7, 10)}, {rgb(171, 178, 191), rgb(5, 7, 10)}, {rgb(241, 243, 246), rgb(5, 7, 10)}}}};
 inline BandColors band_colors(Mode mode, int tint, bool dark) {
   const int m = mode == Mode::HEAT ? 0 : mode == Mode::COOL ? 1 : 2;
   return BAND_PALETTE[dark ? 1 : 0][m][std::min(std::max(tint, 0), TINT_COUNT - 1)];

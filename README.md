@@ -46,7 +46,7 @@ the list of today's bands.
   - **Not merged.** Neighbouring bands with another temperature or another preset stay two bands (the same preset, one).
   - **A tint per value.** The value is the temperature, or the preset when the band has no temperature. In a day, the same
     mode and value always have the same tint (up to 4, then it starts again). The tints are the palette of the editor, with
-    different hues: heat amber, brick red, gold, olive; cool pale blue, cyan, violet, azure; off four greys. Each tint has
+    different hues: heat amber, orange, red, purple; cool azure, deep blue, sky blue, aqua; off four greys. Each tint has
     its own text colour (at least 4.5 to 1 on its fill, in both looks); the look of the screen picks the light or dark column.
   - **A joint of 2 px** between neighbours (the track shows through); a band keeps at least 1 px.
   - **The value on the band** (from 2 cells up, never in a 1x1 tile, which has colours and joints only): the temperature, or
@@ -54,7 +54,7 @@ the list of today's bands.
     degree sign; under about 12 px nothing. The bar is one line of text high when the tile keeps its look with that, else
     thin and without labels. The label steps aside, or goes, when the "now" tick would stand on it.
   - Example, the program "Casa" on a Tuesday: heat with the preset away 00:00-15:00, home 15:00-22:30, away 22:30-24:00, no
-    temperature: three bands, away and home in two clearly different colours (amber and brick red), the two aways in the same one (`preview.yaml`, tile "Casa").
+    temperature: three bands, away and home in two clearly different colours (amber and orange), the two aways in the same one (`preview.yaml`, tile "Casa").
   - Needs no new attribute: the presets come in `today_preset`, already one of the 16 of the manifest.
 
 ## Sizes

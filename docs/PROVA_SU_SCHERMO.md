@@ -173,11 +173,11 @@ o perde il Wi-Fi aprendo la modifica, annotalo (e il giorno con più fasce).
   `cronotermostato.set_day` dai permessi del dispositivo.
 - Per tornare al plugin 0.1.x: ricostruisci con la cartella di prova del commit precedente (la card torna in sola lettura).
 
-### Colori e valori sulla barra (plugin 0.2.2, colori netti dalla 0.2.3)
+### Colori e valori sulla barra (plugin 0.2.2, colori netti dalla 0.2.3, palette pieni dalla 0.2.4)
 
 Con un programma che ha fasce dello stesso modo e valori diversi (per esempio il programma "Casa" di martedì: riscaldamento
 con preset away 00:00-15:00, home 15:00-22:30, away 22:30-24:00), controlla sul vero schermo, in chiaro e in scuro:
-1. le fasce con preset o temperatura diversi hanno colori nettamente diversi (riscaldamento: ambra, mattone, oro, oliva; raffrescamento: azzurro, ciano, viola, blu; spento: quattro grigi), e quelle con lo stesso valore lo stesso colore; away e home del programma "Casa" si distinguono a colpo d'occhio, in chiaro e in scuro;
+1. le fasce con preset o temperatura diversi hanno colori nettamente diversi (riscaldamento: ambra, arancione, rosso, porpora; raffrescamento: azzurro, blu, celeste, verde acqua; spento: quattro grigi), e quelle con lo stesso valore lo stesso colore; away e home del programma "Casa" si distinguono a colpo d'occhio, in chiaro e in scuro;
 2. fra una fascia e la successiva c'è un filo di separazione ben visibile;
 3. nei tile da 2x2 in su la barra riporta temperatura o preset sulle fasce abbastanza larghe, e il testo si legge su ogni tinta;
 4. il tile 1x1 mostra solo colori e separatori;
