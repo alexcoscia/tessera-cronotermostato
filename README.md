@@ -4,8 +4,8 @@ A room tile for the cronotermostato integration of Home Assistant. It shows the 
 **-** keys, the program that rules the room, and a bar with today's bands (heating, cooling, off). A tap on the bar opens
 the list of today's bands.
 
-> **Not tried on a real screen yet.** Everything here was checked on the plugin bench only (the pictures, the touch zones,
-> and the commands the keys would send). Try it on a spare room first. See "What is not tried yet" below.
+> **Tried on a real screen: the Waveshare 7B** (by the author, with the integration 0.3.2 or newer). The other boards
+> (the 2.8-inch CYD, the 4-inch and 10.1-inch Guition) were checked on the plugin bench only. See "What is not tried yet".
 
 ## Needs
 
@@ -165,17 +165,13 @@ Good to know:
 
 ## What is not tried yet
 
-- **A real screen.** The tile was drawn and its touch zones were checked on the plugin bench on several screens, light and
-  dark. It was not built for and run on a real display, so how the zones fall under a real finger, the colours in the
-  room's light and the speed of the screen are unknown.
-- **A real Home Assistant.** The keys and the pill send the two actions with the right fields (checked on the bench), but
-  they were not yet sent to a real Home Assistant, nor to a real thermostat. The tap on the bar and the list of bands
-  (the card) were drawn on the bench but not tried by hand on a screen.
-- **The editing.** `set_day` is called with the fields the integration expects (checked on the bench with real taps, and the
-  integration's own tests cover the service), but it was never called on a real Home Assistant from a real screen. How
-  fast Home Assistant answers, how the 7 mm keys feel under a finger, the memory the card takes on the chip, and a long
-  list of strings in the real core are not known. Try it first with a program of its own assigned to one test room
-  (`docs/PROVA_SU_SCHERMO.md`).
+- **Other real screens.** The tile and the card were run on the Waveshare 7B only. On the 2.8-inch CYD, the 4-inch and the
+  10.1-inch Guition they were drawn and their touch zones checked on the plugin bench, light and dark, but not built for
+  and run on the glass. How the 7 mm keys fall under a finger there, the colours in the room's light and, on the CYD (no
+  PSRAM), the memory the card takes on the chip are unknown.
+- **Long use.** The editing works on the author's own setup; a long list of strings in the real core (presets with long
+  names, many bands) and the way Home Assistant answers under load were not measured. Try it first with a program of its
+  own assigned to one test room (`docs/PROVA_SU_SCHERMO.md`).
 
 ## Development
 
