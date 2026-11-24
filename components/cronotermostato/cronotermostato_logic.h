@@ -348,27 +348,22 @@ inline RowValue row_value(const std::string &temp, const std::string &preset, in
   return v;
 }
 
-// The colours of a band: fill and text, by mode, tint (0..TINT_COUNT-1) and look. The same palette as the editor in Home Assistant
-// (integration repository, custom_components/cronotermostato/frontend/lib/day-editing.js, docstring of bandTints; the values are
-// styles.js, --crono-<mode>-v<n>-bg and --crono-<mode>-v<n>): four full, saturated tints of different HUE for each mode, so values of the
-// same mode can be told apart at a glance (heat: amber, orange, red, purple; cool: azure, deep blue, sky blue, aqua; off: four greys).
-// Tint 0 is the plain colour of the mode (amber, azure, light grey in the light look), taken from the palette too. Plain constants, in sRGB: no word. tools/gen_parity.mjs writes tests/palette.inc from styles.js, so the
-// tests say when the editor changes a colour. Index [look][mode][tint]: look 0 light, 1 dark; mode 0 heat, 1 cool, 2 off.
-// A colour as 0xRRGGBB from its channels (the palette is written in decimal channels: tools/check.py keeps hex colours out of the tile's code).
-constexpr uint32_t rgb(unsigned r, unsigned g, unsigned b) { return (r << 16) | (g << 8) | b; }
-struct BandColors {
-  uint32_t fill, text;
+// The colour of a band, as a recipe of theme roles (never a number): a role of the screen, or a mix of two, so the bands follow the
+// screen's look (light, dark) and its colour table. The text on the band is chosen by the tile from the fill (the more readable of
+// INK and ON_ACCENT). Four tints for each mode, so values of the same mode can be told apart at a glance
+// (heat: amber, orange, red, purple; cool: blue, deep blue, sky, aqua; off: four greys). Tint 0 is the plain colour of the mode.
+enum class Hue : uint8_t { AMBER, ALERT, PURPLE, BLUE, BLUE_DEEP, GREEN, WHITE, TRACK, SUBTLE, MUTED, INK_SOFT };
+struct BandRecipe {
+  Hue a, b;    // the colour is a, or a mixed with b
+  uint8_t pct; // how much of b, 0..100 (0: a alone)
 };
-constexpr BandColors BAND_PALETTE[2][3][TINT_COUNT] = {
-    {{{rgb(255, 179, 0), rgb(58, 36, 0)}, {rgb(255, 122, 26), rgb(58, 20, 0)}, {rgb(214, 40, 40), rgb(255, 255, 255)}, {rgb(142, 36, 170), rgb(255, 255, 255)}},
-     {{rgb(74, 158, 255), rgb(2, 31, 61)}, {rgb(30, 63, 174), rgb(255, 255, 255)}, {rgb(143, 224, 250), rgb(6, 48, 63)}, {rgb(18, 179, 173), rgb(0, 48, 46)}},
-     {{rgb(188, 194, 203), rgb(32, 37, 44)}, {rgb(125, 133, 147), rgb(11, 14, 18)}, {rgb(79, 87, 102), rgb(255, 255, 255)}, {rgb(30, 35, 44), rgb(255, 255, 255)}}},
-    {{{rgb(230, 154, 0), rgb(31, 19, 0)}, {rgb(242, 106, 27), rgb(32, 10, 0)}, {rgb(198, 40, 40), rgb(255, 255, 255)}, {rgb(162, 60, 192), rgb(255, 255, 255)}},
-     {{rgb(74, 158, 255), rgb(2, 31, 61)}, {rgb(35, 71, 200), rgb(255, 255, 255)}, {rgb(155, 227, 251), rgb(6, 48, 63)}, {rgb(20, 184, 176), rgb(0, 48, 46)}},
-     {{rgb(72, 80, 96), rgb(255, 255, 255)}, {rgb(118, 128, 143), rgb(5, 7, 10)}, {rgb(171, 178, 191), rgb(5, 7, 10)}, {rgb(241, 243, 246), rgb(5, 7, 10)}}}};
-inline BandColors band_colors(Mode mode, int tint, bool dark) {
+constexpr BandRecipe BAND_RECIPES[3][TINT_COUNT] = {
+    {{Hue::AMBER, Hue::AMBER, 0}, {Hue::AMBER, Hue::ALERT, 50}, {Hue::ALERT, Hue::ALERT, 0}, {Hue::PURPLE, Hue::PURPLE, 0}},
+    {{Hue::BLUE, Hue::BLUE, 0}, {Hue::BLUE_DEEP, Hue::BLUE_DEEP, 0}, {Hue::BLUE, Hue::WHITE, 55}, {Hue::BLUE, Hue::GREEN, 55}},
+    {{Hue::TRACK, Hue::SUBTLE, 45}, {Hue::SUBTLE, Hue::SUBTLE, 0}, {Hue::MUTED, Hue::MUTED, 0}, {Hue::INK_SOFT, Hue::INK_SOFT, 0}}};
+inline const BandRecipe &band_recipe(Mode mode, int tint) {
   const int m = mode == Mode::HEAT ? 0 : mode == Mode::COOL ? 1 : 2;
-  return BAND_PALETTE[dark ? 1 : 0][m][std::min(std::max(tint, 0), TINT_COUNT - 1)];
+  return BAND_RECIPES[m][std::min(std::max(tint, 0), TINT_COUNT - 1)];
 }
 
 // WCAG relative luminance and contrast ratio of colours given as 0xRRGGBB.

@@ -2,7 +2,7 @@
 # entities): the target temperature with plus and minus keys, and a bar with today's bands of the room's program.
 # Every field is explained in docs/MANIFEST.md of tessera-plugins.
 id: cronotermostato
-version: 0.2.4
+version: 0.2.5
 api: "0.24"
 icon: thermometer
 maintainer: alexcoscia
@@ -12,7 +12,7 @@ topics: [home]
 requires:
   esphome: 2026.6.2
 boards: any
-flash_kb: 8
+flash_kb: 64   # measured: the plugin's own text and rodata in the linked image of a Waveshare 7B build (about 63 KB, 0.2.4)
 
 permissions:
   # The keys call the integration's services; they are not climate.* actions. The screen only sends them.

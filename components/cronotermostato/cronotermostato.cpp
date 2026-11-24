@@ -83,13 +83,39 @@ static char decimal_of(const tessera::Plugin *plugin) {
   return *separator ? *separator : '.';
 }
 
-// The colours of a band: fill and text from the palette of the editor in Home Assistant (cronotermostato_logic.h, BAND_PALETTE),
-// by mode, tint and look. Four tints of different hue for each mode, tint 0 the plain colour of the mode. Constants, no theme role.
-static lv_color_t color_of(uint32_t rgb) { return lv_color_make((uint8_t) (rgb >> 16 & 0xFF), (uint8_t) (rgb >> 8 & 0xFF), (uint8_t) (rgb & 0xFF)); }
+// The colours of a band: a recipe of theme roles (cronotermostato_logic.h, band_recipe), so the bands follow the screen's look and its
+// colour table. The fill is a role or a mix of two; the text goes in INK or ON_ACCENT, whichever reads better on the fill.
+struct BandColors {
+  lv_color_t fill, text;
+};
+static lv_color_t hue_color(Hue hue) {
+  switch (hue) {
+    case Hue::AMBER: return ui::color(theme::MARK_AMBER);
+    case Hue::ALERT: return ui::tone_color(Tone::ALERT, theme::TRACK);
+    case Hue::PURPLE: return ui::color(theme::MARK_PURPLE);
+    case Hue::BLUE: return ui::color(theme::MARK_BLUE);
+    case Hue::BLUE_DEEP: return ui::color(theme::ACCENT_PRESSED);
+    case Hue::GREEN: return ui::color(theme::MARK_GREEN);
+    case Hue::WHITE: return ui::color(theme::ON_ACCENT);
+    case Hue::TRACK: return ui::color(theme::TRACK);
+    case Hue::SUBTLE: return ui::color(theme::SUBTLE);
+    case Hue::MUTED: return ui::color(theme::MUTED);
+    default: return ui::color(theme::INK_SOFT);
+  }
+}
+static uint32_t rgb_of(lv_color_t c) { return ((uint32_t) c.red << 16) | ((uint32_t) c.green << 8) | c.blue; }
+static BandColors band_colors(Mode mode, int tint) {
+  const BandRecipe &r = band_recipe(mode, tint);
+  BandColors c;
+  c.fill = r.pct ? lv_color_mix(hue_color(r.b), hue_color(r.a), (uint8_t) (r.pct * 255 / 100)) : hue_color(r.a);
+  const lv_color_t ink = ui::color(theme::INK), light = ui::color(theme::ON_ACCENT);
+  c.text = contrast_ratio(rgb_of(c.fill), rgb_of(ink)) >= contrast_ratio(rgb_of(c.fill), rgb_of(light)) ? ink : light;
+  return c;
+}
 // A block in the colour of a band; returns the colours (the text goes on the fill).
 static BandColors paint_band(lv_obj_t *block, Mode mode, int tint) {
-  const BandColors c = band_colors(mode, tint, theme::dark);
-  lv_obj_set_style_bg_color(block, color_of(c.fill), 0);
+  const BandColors c = band_colors(mode, tint);
+  lv_obj_set_style_bg_color(block, c.fill, 0);
   return c;
 }
 
@@ -607,7 +633,7 @@ class RoomTile : public tessera::Tile {
     lv_obj_set_width(l, label_w_[i] + ui::px(2));
     lv_obj_set_y(l, std::max(0, (bar_h_ - ui::line_height(Font::BODY)) / 2));
     ui::set_text(l, text);
-    lv_obj_set_style_text_color(l, color_of(colors.text), 0);
+    lv_obj_set_style_text_color(l, colors.text, 0);
     place_label(i, spans_x0_[i]);
   }
 
@@ -1610,7 +1636,7 @@ class DayCard : public tessera::Card {
       static const char *const names[K_COUNT] = {"s-60", "s-15", "s+15", "s+60", "e-60", "e-15", "e+15", "e+60", "mode", "t-", "t+", "del", "save", "back"};
       for (int k = 0; k < K_COUNT; ++k) add(names[k], detail_rect(k));
     }
-    ESP_LOGI(TAG, "%s", line);
+    ESP_LOGD(TAG, "%s", line);
   }
   bool panel_changed() const { return logged_ok_ != panel_ok_; }
 

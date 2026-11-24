@@ -2038,50 +2038,6 @@ TEST(row_value_ladder) {
   CHECK(!v.cut && v.text.empty());
 }
 
-// CIEDE2000 between two colours 0xRRGGBB (D65), as the editor's test (tests/frontend/contrast.test.mjs) measures the tints apart.
-static void to_lab(uint32_t rgb, double &L, double &a, double &b) {
-  double c[3];
-  for (int i = 0; i < 3; ++i) {
-    const double v = (double) ((rgb >> (16 - 8 * i)) & 0xFF) / 255.0;
-    c[i] = v <= 0.04045 ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4);
-  }
-  const double x = (0.4124564 * c[0] + 0.3575761 * c[1] + 0.1804375 * c[2]) / 0.95047;
-  const double y = 0.2126729 * c[0] + 0.7151522 * c[1] + 0.0721750 * c[2];
-  const double z = (0.0193339 * c[0] + 0.1191920 * c[1] + 0.9503041 * c[2]) / 1.08883;
-  auto f = [](double t) { return t > 216.0 / 24389.0 ? std::cbrt(t) : (24389.0 / 27.0 * t + 16.0) / 116.0; };
-  L = 116.0 * f(y) - 16.0;
-  a = 500.0 * (f(x) - f(y));
-  b = 200.0 * (f(y) - f(z));
-}
-static double delta_e2000(uint32_t c1, uint32_t c2) {
-  const double pi = 3.14159265358979323846, rad = pi / 180.0;
-  double L1, a1, b1, L2, a2, b2;
-  to_lab(c1, L1, a1, b1);
-  to_lab(c2, L2, a2, b2);
-  const double Cb = (std::hypot(a1, b1) + std::hypot(a2, b2)) / 2.0;
-  const double G = 0.5 * (1.0 - std::sqrt(std::pow(Cb, 7) / (std::pow(Cb, 7) + std::pow(25.0, 7))));
-  const double a1p = (1 + G) * a1, a2p = (1 + G) * a2;
-  const double C1 = std::hypot(a1p, b1), C2 = std::hypot(a2p, b2);
-  auto hue = [&](double b, double a) { const double h = std::atan2(b, a) / rad; return (a == 0 && b == 0) ? 0.0 : (h < 0 ? h + 360 : h); };
-  const double h1 = hue(b1, a1p), h2 = hue(b2, a2p);
-  double dh = 0;
-  if (C1 * C2 != 0) {
-    dh = h2 - h1;
-    if (dh > 180) dh -= 360;
-    else if (dh < -180) dh += 360;
-  }
-  const double dL = L2 - L1, dC = C2 - C1, dH = 2 * std::sqrt(C1 * C2) * std::sin(dh * rad / 2);
-  const double Lb = (L1 + L2) / 2, Cbp = (C1 + C2) / 2;
-  double hb = h1 + h2;
-  if (C1 * C2 != 0) hb = std::fabs(h1 - h2) <= 180 ? (h1 + h2) / 2 : (h1 + h2 < 360 ? (h1 + h2 + 360) / 2 : (h1 + h2 - 360) / 2);
-  const double T = 1 - 0.17 * std::cos((hb - 30) * rad) + 0.24 * std::cos(2 * hb * rad) + 0.32 * std::cos((3 * hb + 6) * rad) - 0.20 * std::cos((4 * hb - 63) * rad);
-  const double dth = 30 * std::exp(-std::pow((hb - 275) / 25, 2));
-  const double Rc = 2 * std::sqrt(std::pow(Cbp, 7) / (std::pow(Cbp, 7) + std::pow(25.0, 7)));
-  const double Sl = 1 + 0.015 * std::pow(Lb - 50, 2) / std::sqrt(20 + std::pow(Lb - 50, 2)), Sc = 1 + 0.045 * Cbp, Sh = 1 + 0.015 * Cbp * T;
-  const double Rt = -std::sin(2 * dth * rad) * Rc;
-  return std::sqrt(std::pow(dL / Sl, 2) + std::pow(dC / Sc, 2) + std::pow(dH / Sh, 2) + Rt * (dC / Sc) * (dH / Sh));
-}
-
 TEST(contrast_helpers) {
   CHECK(std::fabs(relative_luminance(0x000000) - 0.0) < 1e-9);
   CHECK(std::fabs(relative_luminance(0xFFFFFF) - 1.0) < 1e-9);
@@ -2096,84 +2052,30 @@ TEST(contrast_helpers) {
   CHECK(std::fabs(contrast_ratio(0x009FE3, 0xFFFFFF) - 2.9709) < 1e-3);
 }
 
-static double lab_hue(uint32_t rgb) {
-  double L, a, b;
-  to_lab(rgb, L, a, b);
-  double h = std::atan2(b, a) * 180.0 / 3.14159265358979323846;
-  return h < 0 ? h + 360.0 : h;
+static bool same_recipe(const BandRecipe &x, const BandRecipe &y) { return x.a == y.a && x.b == y.b && x.pct == y.pct; }
+
+TEST(band_recipe_clamps_the_tint_and_the_mode) {
+  CHECK(same_recipe(band_recipe(Mode::HEAT, -1), band_recipe(Mode::HEAT, 0)));
+  CHECK(same_recipe(band_recipe(Mode::COOL, TINT_COUNT + 7), band_recipe(Mode::COOL, TINT_COUNT - 1)));
+  CHECK(same_recipe(band_recipe(mode_from_code(7), 2), band_recipe(Mode::OFF, 2)));
 }
 
-TEST(palette_matches_the_editor) {
-  // tests/palette.inc comes from the editor's styles.js (tools/gen_parity.mjs): {look, mode, tint, fill, text}
-  struct Row { int look, mode, tint; uint32_t fill, text; };
-  static const Row rows[] = {
-#include "palette.inc"
-  };
-  CHECK(sizeof(rows) / sizeof(rows[0]) == 24);
-  const Mode modes[3] = {Mode::HEAT, Mode::COOL, Mode::OFF};
-  for (const Row &r : rows) {
-    const BandColors c = band_colors(modes[r.mode], r.tint, r.look == 1);
-    if (c.fill != r.fill || c.text != r.text) std::printf("  look %d mode %d tint %d: %06X/%06X, the editor has %06X/%06X\n", r.look, r.mode, r.tint, (unsigned) c.fill, (unsigned) c.text, (unsigned) r.fill, (unsigned) r.text);
-    CHECK(c.fill == r.fill && c.text == r.text);
-  }
-}
-
-TEST(band_colors_clamp_the_tint_and_the_mode) {
-  CHECK(band_colors(Mode::HEAT, -1, false).fill == band_colors(Mode::HEAT, 0, false).fill);
-  CHECK(band_colors(Mode::COOL, TINT_COUNT + 7, true).fill == band_colors(Mode::COOL, TINT_COUNT - 1, true).fill);
-  CHECK(band_colors(mode_from_code(7), 2, false).fill == band_colors(Mode::OFF, 2, false).fill);
-}
-
-TEST(band_text_is_readable_in_both_looks) {
-  // 4.5 to 1 of the text on its own fill, every tint of every mode, light and dark
-  for (int dark = 0; dark < 2; ++dark)
-    for (Mode m : {Mode::HEAT, Mode::COOL, Mode::OFF})
-      for (int t = 0; t < TINT_COUNT; ++t) {
-        const BandColors c = band_colors(m, t, dark == 1);
-        const double ratio = contrast_ratio(c.fill, c.text);
-        if (ratio < 4.5) std::printf("  dark %d mode %d tint %d: %.2f\n", dark, (int) m, t, ratio);
-        CHECK(ratio >= 4.5);
-      }
-}
-
-TEST(tints_of_one_mode_differ_in_both_looks) {
-  for (int dark = 0; dark < 2; ++dark)
-    for (Mode m : {Mode::HEAT, Mode::COOL, Mode::OFF})
-      for (int a = 0; a < TINT_COUNT; ++a)
-        for (int b = a + 1; b < TINT_COUNT; ++b) {
-          const double d = delta_e2000(band_colors(m, a, dark == 1).fill, band_colors(m, b, dark == 1).fill);
-          if (d < 15) std::printf("  dark %d mode %d tints %d/%d: %.1f\n", dark, (int) m, a, b, d);
-          CHECK(d >= 15);   // the editor's own bar (CIEDE2000 >= 15 between any two fills of a mode)
+TEST(band_recipes_are_all_different) {
+  // No two bands of the whole table (3 modes x tints) are painted by the same recipe, so no tint is taken for another
+  for (int m1 = 0; m1 < 3; ++m1)
+    for (int t1 = 0; t1 < TINT_COUNT; ++t1)
+      for (int m2 = 0; m2 < 3; ++m2)
+        for (int t2 = 0; t2 < TINT_COUNT; ++t2) {
+          if (m1 == m2 && t1 == t2) continue;
+          CHECK(!same_recipe(BAND_RECIPES[m1][t1], BAND_RECIPES[m2][t2]));
         }
 }
 
-TEST(no_tint_of_a_mode_is_taken_for_another_mode) {
-  // Every fill of the palette is at least 15 (CIEDE2000) from every fill of another mode, in both looks: no exception for tint 0 any more.
-  for (int dark = 0; dark < 2; ++dark)
-    for (int a = 0; a < TINT_COUNT; ++a)
-      for (int b = 0; b < TINT_COUNT; ++b) {
-        const uint32_t heat = band_colors(Mode::HEAT, a, dark == 1).fill, cool = band_colors(Mode::COOL, b, dark == 1).fill, off = band_colors(Mode::OFF, b, dark == 1).fill;
-        const uint32_t coola = band_colors(Mode::COOL, a, dark == 1).fill;
-        const double d[3] = {delta_e2000(heat, cool), delta_e2000(heat, off), delta_e2000(coola, off)};
-        for (double v : d) {
-          if (v < 15) std::printf("  dark %d tints %d/%d: %.1f\n", dark, a, b, v);
-          CHECK(v >= 15);
-        }
-      }
-}
-
-TEST(heat_and_cool_hues_stay_in_their_family) {
-  // heat: amber, orange, red, purple; cool: azure, deep blue, sky blue, aqua (hue angle of CIELAB, as the editor's contrast test does)
-  struct Range { double lo, hi; };
-  const Range heat[TINT_COUNT] = {{55, 95}, {40, 65}, {20, 45}, {300, 340}};
-  const Range cool[TINT_COUNT] = {{255, 290}, {285, 305}, {215, 245}, {175, 205}};
-  for (int dark = 0; dark < 2; ++dark)
-    for (int t = 0; t < TINT_COUNT; ++t) {
-      const double h = lab_hue(band_colors(Mode::HEAT, t, dark == 1).fill), c = lab_hue(band_colors(Mode::COOL, t, dark == 1).fill);
-      if (h < heat[t].lo || h > heat[t].hi) std::printf("  dark %d heat tint %d: hue %.0f\n", dark, t, h);
-      if (c < cool[t].lo || c > cool[t].hi) std::printf("  dark %d cool tint %d: hue %.0f\n", dark, t, c);
-      CHECK(h >= heat[t].lo && h <= heat[t].hi);
-      CHECK(c >= cool[t].lo && c <= cool[t].hi);
+TEST(band_recipes_are_well_formed) {
+  for (auto &mode : BAND_RECIPES)
+    for (const BandRecipe &r : mode) {
+      CHECK(r.pct <= 100);
+      CHECK(r.pct > 0 || r.a == r.b);   // a recipe without a mix names one role
     }
 }
 

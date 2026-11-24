@@ -9,7 +9,7 @@ the list of today's bands.
 
 ## Needs
 
-- The **cronotermostato integration 0.2.0 or later** in Home Assistant. Older versions do not give the tile today's bands.
+- The **[cronotermostato integration](https://github.com/alexcoscia/cronotermostato) 0.2.0 or later** in Home Assistant (not the other Home Assistant package with a similar name). Older versions do not give the tile today's bands.
   To **edit the bands from the display** (see below) it must be **0.3.2 or later**: the screen reads `edit_info`,
   `edit_seq`, `edit_n` and `today_flags`, and calls `cronotermostato.set_day`. **Update the integration first, then the
   plugin** (never the other way round). With an older integration the editing is not offered or cannot save: before 0.3.1
@@ -21,6 +21,18 @@ the list of today's bands.
   `cronotermostato.resume_auto` (the keys and the pill) and `cronotermostato.set_day` (Save in the editing of the bands).
 
 ## Set up
+
+**First, the integration in Home Assistant** (skip this if it is already installed and a room has a program):
+
+1. Install [cronotermostato](https://github.com/alexcoscia/cronotermostato) with HACS: search **Cronotermostato** and
+   **Download** it. Restart Home Assistant. (If it does not show up in the search, add
+   `https://github.com/alexcoscia/cronotermostato` under **Custom repositories**, category **Integration**.)
+2. **Settings**, **Devices & services**, **Add integration**, search **Cronotermostato**, and add it.
+3. Make a program and assign it to the room: open **Cronotermostato** in the sidebar (the editor), create a program
+   (a name, seven days of slots), and assign it to the room's `climate` entity. The integration then creates
+   `sensor.<room>_program` (`sensor.<room>_programma` in an Italian Home Assistant), the sensor the tile needs.
+
+**Then, in Tessera:**
 
 1. In the Tessera app, open **Plugins** and enable **Cronotermostato** for the screen. The screen builds once.
 2. Open the screen's **Layout** and place the **Room program** tile on a page. It starts at one cell and you can grow it
@@ -45,9 +57,10 @@ the list of today's bands.
   now. Bands of the same mode that differ in value are told apart, as in the editor in Home Assistant:
   - **Not merged.** Neighbouring bands with another temperature or another preset stay two bands (the same preset, one).
   - **A tint per value.** The value is the temperature, or the preset when the band has no temperature. In a day, the same
-    mode and value always have the same tint (up to 4, then it starts again). The tints are the palette of the editor, with
-    different hues: heat amber, orange, red, purple; cool azure, deep blue, sky blue, aqua; off four greys. Each tint has
-    its own text colour (at least 4.5 to 1 on its fill, in both looks); the look of the screen picks the light or dark column.
+    mode and value always have the same tint (up to 4, then it starts again). The tints are colours of the screen's own
+    theme (its roles, or a mix of two), so they follow its light and dark look: heat amber, orange, red, purple; cool blue,
+    deep blue, sky blue, aqua; off four greys. The text on a band is the more readable of the screen's ink and its text on
+    a key.
   - **A joint of 2 px** between neighbours (the track shows through); a band keeps at least 1 px.
   - **The value on the band** (from 2 cells up, never in a 1x1 tile, which has colours and joints only): the temperature, or
     the preset, cut with dots when long; a narrow band shows two letters of the preset or the temperature without its
@@ -171,40 +184,8 @@ Good to know:
   PSRAM), the memory the card takes on the chip are unknown.
 - **Long use.** The editing works on the author's own setup; a long list of strings in the real core (presets with long
   names, many bands) and the way Home Assistant answers under load were not measured. Try it first with a program of its
-  own assigned to one test room (`docs/PROVA_SU_SCHERMO.md`).
+  own assigned to one test room.
 
 ## Development
 
-The logic that needs no screen (bands to pixels, texts, the + and - timing, what the pill says) is in
-`components/cronotermostato/cronotermostato_logic.h`, plain C++17. Its tests build and run on a computer, with the
-address and undefined-behaviour sanitizers:
-
-```sh
-tests/run.sh
-```
-
-`tests/parity.inc` holds bar positions computed by the editor's own `stripSegments` (integration repository,
-`tests/frontend/cases.json`); the bar must match them within a pixel. `tests/overlap.inc` holds a day with overlapping
-bands: the editor draws them over each other, the tile trims the later one (a deliberate difference). `tests/tints.inc`,
-`labels.inc`, `siglas.inc` and `palette.inc` (the colours of the editor's `styles.js`) hold what the editor's `bandTints`, `segmentDetail` and `presetSigla` say (the tile matches
-them; one known difference: it does not change the case of letters outside ASCII). Regenerate all with
-`node tools/gen_parity.mjs [path of the integration repository]` (default `../cronotermostato`, at commit 4e529dc or later).
-
-The touch flow of the bench (`tools/bench_flow.py`) opens the card of the first room tile with real taps, enters the
-editing, adds a band, saves, answers the way the integration does (new bands, a refusal, a change made elsewhere), deletes
-(Delete -> Cancel sends nothing, an early Confirm sends nothing, Confirm sends; a change made elsewhere or a pause while the
-question is open closes it without sending), waits for the timeout and opens a tile whose option `edit` is off. It checks the `cronotermostato.set_day` call (day,
-revision, text of the bands) and photographs every step, light and dark, into `.preview-flow/<board>/`. It needs the bench
-of `tessera-plugins` (set up once with `preview.py --setup`) and its Python:
-
-```sh
-tools/bench_flow.sh cyd            # or guition, waveshare7b, jc8012p4a1: pictures in .preview-flow/<board>/<board>/flow-*.png
-TESSERA_PLUGINS=/path/to/tessera-plugins tools/bench_flow.sh cyd   # when it is not beside this repository
-```
-
-It prints `FLOW <board> PASS|FAIL <check>` lines and ends with status 1 if a check fails. The card logs one line
-`CRONOPAD view=... name:x,y,w,h ...` when what it shows changes: the script reads the keys from it. The geometry and the
-zones of the editing are in `components/cronotermostato/cronotermostato_pad.h`, tested by `tests/test_pad.cpp`.
-
-The notes of the first spike on the plugin API are in `docs/SPIKE.md` (history). The checklist for trying the plugin on a
-real screen is in `docs/PROVA_SU_SCHERMO.md` (Italian).
+Tests, the editor parity data and the bench are described in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).

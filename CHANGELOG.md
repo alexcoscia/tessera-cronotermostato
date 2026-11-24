@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.5
+- Changes asked in the review of the store listing (tessera-plugins #44):
+- **The bands are painted with theme roles**, no longer with a palette of rgb() constants. Each tint is a role of the screen
+  (`MARK_AMBER`, `MARK_PURPLE`, `MARK_BLUE`, `MARK_GREEN`, `ACCENT_PRESSED`, the tone `ALERT`, `SUBTLE`, `MUTED`, `INK_SOFT`) or a
+  mix of two, so the bar follows the screen's light and dark look and its colour table. The text on a band is the more readable
+  of `INK` and `ON_ACCENT`. The four tints per mode keep their hues (heat amber, orange, red, purple; cool blue, deep blue, sky,
+  aqua; off four greys); the exact colours are no longer those of the editor in Home Assistant.
+- Tests: the palette parity with the editor (`palette.inc`) and the colour-distance tests are gone; the table is checked for
+  distinct recipes and for clamping.
+- **README**: how to get the integration (link, HACS, add the integration, make a program and assign it
+  to a room), and the development notes moved to `docs/DEVELOPMENT.md`.
+- `flash_kb` 8 -> 64, measured from the linked image of a Waveshare 7B build.
+- The card's `CRONOPAD` line is logged at debug level, not info.
+
 ## 0.2.4
 - **More different colours.** The palette of 0.2.3 (editor commit 4e529dc) still had tints that looked alike (v0 was a pale wash,
   gold and olive near each other). It is replaced by the new palette of the editor in Home Assistant (integration commit
