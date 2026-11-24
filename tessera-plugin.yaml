@@ -12,7 +12,7 @@ topics: [home]
 requires:
   esphome: 2026.6.2
 boards: any
-flash_kb: 64   # measured: the plugin's own text and rodata in the linked image of a Waveshare 7B build (about 63 KB, 0.2.4)
+flash_kb: 64   # measured: Waveshare 7B image with and without the plugin, 63,232 bytes more (0.2.5); its own text and rodata about 64 KB
 
 permissions:
   # The keys call the integration's services; they are not climate.* actions. The screen only sends them.
